@@ -438,26 +438,26 @@
 
 ## 9. IPC — интерфейс между Renderer и Electron
 
-- [ ] В preload.ts безопасно expose функцию `window.api.invoke(channel, payload)` для ограниченных каналов.
-- [ ] В `electron/ipc/export.ts` реализовать обработчик `ipcMain.handle('export:execute', async (event, payload) => { ... })`.
-- [ ] В `electron/ipc/fileBrowser.ts` реализовать `listDirectory` и `statFile` (разрешать только безопасные пути).
-- [ ] В renderer реализовать wrapper `src/services/ipcService.ts` для вызовов `window.api.invoke(...)`.
+- [x] В preload.ts безопасно expose функцию `window.api.invoke(channel, payload)` для ограниченных каналов.
+- [x] В `electron/ipc/export.ts` реализовать обработчик `ipcMain.handle('export:execute', async (event, payload) => { ... })`.
+- [x] В `electron/ipc/fileBrowser.ts` реализовать `listDirectory` и `statFile` (разрешать только безопасные пути).
+- [x] В renderer реализовать wrapper `src/services/ipcService.ts` для вызовов `window.api.invoke(...)`.
 
 ---
 
 ## 9.1. Диалоги файловой системы Windows
 
-- [ ] Создать `electron/ipc/dialogs.ts` для обработки диалогов выбора папок и файлов.
-- [ ] Реализовать IPC handler `dialog:showOpenDialog` для выбора папки (использовать `dialog.showOpenDialog` с `properties: ['openDirectory']`).
-- [ ] Реализовать IPC handler `dialog:showSaveDialog` для сохранения файла (использовать `dialog.showSaveDialog`).
-- [ ] Реализовать IPC handler `dialog:showOpenFileDialog` для выбора файла (использовать `dialog.showOpenDialog` с фильтрами).
-- [ ] Добавить каналы `dialog:*` в whitelist в `electron/preload.ts`.
-- [ ] В `src/services/ipcService.ts` добавить методы: `showFolderDialog()`, `showSaveDialog()`, `showOpenFileDialog()`.
-- [ ] В `electron/main.ts` зарегистрировать handlers через `registerDialogHandlers()`.
-- [ ] **Получение стандартных папок Windows:**
-  - [ ] Создать IPC handler `system:getPath` для получения стандартных путей через `app.getPath()` (documents, music, downloads, etc.).
-  - [ ] Добавить канал `system:getPath` в whitelist в `electron/preload.ts`.
-  - [ ] В `src/services/ipcService.ts` добавить метод `getSystemPath(name: string)` для получения путей типа 'documents', 'music', 'downloads'.
+- [x] Создать `electron/ipc/dialogs.ts` для обработки диалогов выбора папок и файлов.
+- [x] Реализовать IPC handler `dialog:showOpenDialog` для выбора папки (использовать `dialog.showOpenDialog` с `properties: ['openDirectory']`).
+- [x] Реализовать IPC handler `dialog:showSaveDialog` для сохранения файла (использовать `dialog.showSaveDialog`).
+- [x] Реализовать IPC handler `dialog:showOpenFileDialog` для выбора файла (использовать `dialog.showOpenDialog` с фильтрами).
+- [x] Добавить каналы `dialog:*` в whitelist в `electron/preload.ts`.
+- [x] В `src/services/ipcService.ts` добавить методы: `showFolderDialog()`, `showSaveDialog()`, `showOpenFileDialog()`.
+- [x] В `electron/main.ts` зарегистрировать handlers через `registerDialogHandlers()`.
+- [x] **Получение стандартных папок Windows:**
+  - [x] Создать IPC handler `system:getPath` для получения стандартных путей через `app.getPath()` (documents, music, downloads, etc.).
+  - [x] Добавить канал `system:getPath` в whitelist в `electron/preload.ts`.
+  - [x] В `src/services/ipcService.ts` добавить метод `getSystemPath(name: string)` для получения путей типа 'documents', 'music', 'downloads'.
   - [ ] Использовать `getSystemPath('music')` или `getSystemPath('documents')` как начальную папку для FileBrowser при первом запуске.
 
 ---

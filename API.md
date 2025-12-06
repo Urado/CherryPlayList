@@ -1,6 +1,6 @@
 # CherryPlayList API Reference
 
-Полный справочник API для разработки CherryPlayList. Этот документ содержит все интерфейсы, методы и типы данных, используемые в приложении.
+Complete API reference for CherryPlayList development. This document contains all interfaces, methods, and data types used in the application.
 
 ---
 
@@ -242,9 +242,10 @@ clear(): void;
 
 Additional helpers exposed internally or via selectors:
 
-- `setDuration(seconds: number)` — from `loadedmetadata`.
-- `handleEnded()` — called on audio `ended` event.
-- `handleError(message: string)` — stores readable error, logs technical details.
+- `setDuration(seconds: number)` — from `loadedmetadata` event, sets track duration.
+- `setPosition(seconds: number)` — from `timeupdate` event, updates current playback position.
+- `handleEnded()` — called on audio `ended` event, sets status to 'ended'.
+- `handleError(message: string, error?: unknown)` — stores readable error message, logs technical details via logger.
 
 #### Usage Example
 
@@ -476,6 +477,43 @@ const duration = await ipcService.invoke('audio:getDuration', { path: '/path/to/
 
 ---
 
+#### `audio:getFileSource`
+
+Get audio file contents as base64 buffer for secure playback. Used by demo player to load audio files without exposing file paths directly.
+
+**Request**:
+
+```typescript
+{
+  path: string;
+}
+```
+
+**Response**:
+
+```typescript
+{
+  success: boolean;
+  data?: {
+    buffer: string;  // Base64 encoded file buffer
+    mimeType: string;  // MIME type (audio/mpeg, audio/flac, etc.)
+  };
+  error?: string;
+}
+```
+
+**Usage**:
+
+```typescript
+const { buffer, mimeType } = await ipcService.invoke('audio:getFileSource', { 
+  path: '/path/to/track.mp3' 
+});
+```
+
+**Note**: This channel is used internally by `demoPlayerStore` to securely load audio files. The file is read as a buffer and converted to base64 for safe transfer to the renderer process.
+
+---
+
 ### Export Channels
 
 #### `export:execute`
@@ -589,6 +627,51 @@ const result = await ipcService.invoke('export:aimp', {
 
 ---
 
+#### `export:copyTracksToFolder`
+
+Copy tracks into a new folder with original filenames (without numbering prefix).
+
+**Request**:
+
+```typescript
+{
+  tracks: Track[];
+  targetPath: string;  // Target folder where new subfolder will be created
+  folderName: string;  // Name of the subfolder to create
+}
+```
+
+**Response**:
+
+```typescript
+{
+  success: boolean;
+  data?: {
+    folderPath: string;  // Path to created folder
+    successful: string[];  // Successfully copied tracks
+    failed: Array<{
+      path: string;
+      error: string;
+    }>;
+  };
+  error?: string;
+}
+```
+
+**Usage**:
+
+```typescript
+const result = await ipcService.invoke('export:copyTracksToFolder', {
+  tracks: playlistTracks,
+  targetPath: '/export/path',
+  folderName: 'My Playlist',
+});
+```
+
+**Note**: This handler creates a subfolder with the specified name, copies all tracks with their original filenames (no numbering prefix), and returns the path to the created folder along with success/failure information.
+
+---
+
 ### Playlist Channels
 
 #### `playlist:save`
@@ -695,6 +778,15 @@ class IPCService {
   // Get audio file duration
   async getAudioDuration(path: string): Promise<number>;
 
+  // Get audio file contents as base64 buffer for secure playback
+  async getAudioFileSource(
+    path: string,
+    showNotification?: boolean,
+  ): Promise<{
+    buffer: string;  // Base64 encoded file buffer
+    mimeType: string;  // MIME type
+  }>;
+
   // Export to AIMP format
   async exportAIMPPlaylist(
     tracks: Track[],
@@ -714,6 +806,29 @@ class IPCService {
 
   // Load playlist
   async loadPlaylist(path: string): Promise<PlaylistData>;
+
+  // Show folder selection dialog
+  async showFolderDialog(options?: {
+    title?: string;
+    defaultPath?: string;
+  }): Promise<string | null>;
+
+  // Show save file dialog
+  async showSaveDialog(options?: {
+    title?: string;
+    defaultPath?: string;
+    filters?: Array<{ name: string; extensions: string[] }>;
+  }): Promise<string | null>;
+
+  // Show open file dialog
+  async showOpenFileDialog(options?: {
+    title?: string;
+    defaultPath?: string;
+    filters?: Array<{ name: string; extensions: string[] }>;
+  }): Promise<string | null>;
+
+  // Get system path (documents, music, downloads, etc.)
+  async getSystemPath(name: string): Promise<string>;
 }
 ```
 
@@ -723,6 +838,10 @@ class IPCService {
 import { ipcService } from './services/ipcService';
 
 const files = await ipcService.listDirectory('/path/to/dir');
+const duration = await ipcService.getAudioDuration('/path/to/track.mp3');
+const { buffer, mimeType } = await ipcService.getAudioFileSource('/path/to/track.mp3');
+const folderPath = await ipcService.showFolderDialog({ title: 'Select folder' });
+const systemPath = await ipcService.getSystemPath('music');
 ```
 
 ---
@@ -756,8 +875,33 @@ class FileService {
 
 ```typescript
 class ExportService {
-  // Export playlist with strategy
-  async exportPlaylist(playlist: PlaylistData, options: ExportOptions): Promise<ExportResult>;
+  // Export playlist with number prefix strategy
+  async exportWithNumberPrefix(
+    tracks: Track[],
+    targetPath: string,
+  ): Promise<ExportResult>;
+
+  // Export playlist to AIMP format (M3U8 with relative paths)
+  async exportAIMPPlaylist(
+    tracks: Track[],
+    targetPath: string,
+    playlistName: string,
+  ): Promise<{
+    playlistPath: string;
+    successful: string[];
+    failed: Array<{ path: string; error: string }>;
+  }>;
+
+  // Copy tracks into a new folder with original filenames
+  async copyTracksToFolder(
+    tracks: Track[],
+    targetPath: string,
+    folderName: string,
+  ): Promise<{
+    folderPath: string;
+    successful: string[];
+    failed: Array<{ path: string; error: string }>;
+  }>;
 
   // Get available strategies
   getAvailableStrategies(): string[];
@@ -901,8 +1045,11 @@ interface ExportError {
 **Location**: `src/components/PlaylistView.tsx`
 
 ```typescript
-// No props - uses Zustand store directly
-export const PlaylistView: React.FC = () => { ... }
+interface PlaylistViewProps {
+  zoneId?: string;  // Zone identifier for drag-and-drop operations
+}
+
+export const PlaylistView: React.FC<PlaylistViewProps> = ({ zoneId }) => { ... }
 ```
 
 **Features**:
@@ -1027,7 +1174,7 @@ export const DemoPlayer: React.FC<DemoPlayerProps> = ({ className }) => { ... }
 
 - Always rendered at the top of `AppHeader`.
 - Shows current track title or placeholder text.
-- Buttons: Play/Pause toggle and “Показать в браузере”.
+- Buttons: Play/Pause toggle and "Show in browser" ("Показать в браузере").
 - Timeline slider and time labels for current/total duration.
 - Volume slider (0–100% mapped to 0..1).
 - Error state disables controls and shows tooltip/notification.
@@ -1036,7 +1183,7 @@ export const DemoPlayer: React.FC<DemoPlayerProps> = ({ className }) => { ... }
 
 - Subscribes to `useDemoPlayerStore`.
 - Uses `seek`, `setVolume`, `play`, `pause`.
-- Calls `uiStore.focusFileInBrowser(path)` when “Показать” is clicked.
+- Calls `uiStore.focusFileInBrowser(path)` when "Show" ("Показать") button is clicked.
 
 ---
 
@@ -1198,7 +1345,7 @@ export const SettingsModal: React.FC = () => { ... }
 
 - Opens when `uiStore.modal === 'settings'`
 - Contains UI customization settings:
-  - **Track item size preset**: Select between "Маленькие", "Средние", "Большие"
+  - **Track item size preset**: Select between "Small" ("Маленькие"), "Medium" ("Средние"), "Large" ("Большие")
     - Small: padding 8px, margin 2px
     - Medium: padding 12px, margin 4px (default)
     - Large: padding 16px, margin 6px
@@ -1226,13 +1373,13 @@ export const ExportModal: React.FC = () => { ... }
 - Opens when `uiStore.modal === 'export'`
 - Contains export configuration:
   - **Export folder**: Input field with browse button for selecting target folder
-  - **Export strategy**: Select between "Копирование с нумерацией" and "AIMP плейлист"
-- On "Экспортировать" button:
+  - **Export strategy**: Select between "Copy with numbering" ("Копирование с нумерацией") and "AIMP playlist" ("AIMP плейлист")
+- On "Export" ("Экспортировать") button:
   - Saves settings to `settingsStore`
   - Executes export via `exportService`
   - Shows success/error notification
   - Closes modal
-- On "Отмена" button: Closes modal without saving or exporting
+- On "Cancel" ("Отмена") button: Closes modal without saving or exporting
 
 **Integration**:
 

@@ -162,7 +162,12 @@ export const PlaylistView: React.FC<PlaylistViewProps> = ({ zoneId }) => {
   );
 
   const hasSelectedTracks = selectedTrackIds.size > 0;
-  const totalDuration = tracks.reduce((sum, track) => sum + (track.duration || 0), 0);
+
+  // Мемоизация вычисления общей длительности
+  const totalDuration = useMemo(
+    () => tracks.reduce((sum, track) => sum + (track.duration || 0), 0),
+    [tracks],
+  );
 
   return (
     <div className="playlist-view">

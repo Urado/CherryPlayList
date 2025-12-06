@@ -7,6 +7,10 @@ import {
   unregisterWorkspaceType,
 } from '../utils/workspaceConstants';
 
+// Map для хранения таймеров уведомлений (notificationId -> timeoutId)
+// Это позволяет очищать таймеры при ручном удалении уведомлений
+const notificationTimers = new Map<string, NodeJS.Timeout>();
+
 export type ModalType = 'settings' | 'export' | null;
 
 export interface Notification {
@@ -103,18 +107,35 @@ export const useUIStore = createWithEqualityFn<UIState>((set, get) => ({
 
     // Auto-remove after duration
     if (newNotification.duration && newNotification.duration > 0) {
-      setTimeout(() => {
-        set((state) => ({
-          notifications: state.notifications.filter((n) => n.id !== id),
-        }));
+      const timeoutId = setTimeout(() => {
+        // Очищаем таймер из Map
+        notificationTimers.delete(id);
+        set((state) => {
+          // Проверяем, что уведомление еще существует (не было удалено вручную)
+          if (state.notifications.some((n) => n.id === id)) {
+            return {
+              notifications: state.notifications.filter((n) => n.id !== id),
+            };
+          }
+          return state;
+        });
       }, newNotification.duration);
+      // Сохраняем ID таймера для возможной очистки
+      notificationTimers.set(id, timeoutId);
     }
   },
 
-  removeNotification: (id) =>
+  removeNotification: (id) => {
+    // Очищаем таймер, если он существует
+    const timeoutId = notificationTimers.get(id);
+    if (timeoutId) {
+      clearTimeout(timeoutId);
+      notificationTimers.delete(id);
+    }
     set((state) => ({
       notifications: state.notifications.filter((n) => n.id !== id),
-    })),
+    }));
+  },
 
   setDragging: (dragging) => set({ dragging }),
 

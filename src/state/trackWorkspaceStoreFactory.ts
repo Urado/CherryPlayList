@@ -348,12 +348,22 @@ function createStore(options: TrackWorkspaceStoreOptions): TrackWorkspaceStore {
     },
 
     selectTrack: (id) =>
-      set((state) => ({
-        selectedTrackIds: new Set([...state.selectedTrackIds, id]),
-      })),
+      set((state) => {
+        // Оптимизация: не создаём новый Set, если id уже выбран
+        if (state.selectedTrackIds.has(id)) {
+          return state;
+        }
+        return {
+          selectedTrackIds: new Set([...state.selectedTrackIds, id]),
+        };
+      }),
 
     deselectTrack: (id) =>
       set((state) => {
+        // Оптимизация: не создаём новый Set, если id не выбран
+        if (!state.selectedTrackIds.has(id)) {
+          return state;
+        }
         const newSet = new Set(state.selectedTrackIds);
         newSet.delete(id);
         return { selectedTrackIds: newSet };
@@ -371,11 +381,24 @@ function createStore(options: TrackWorkspaceStoreOptions): TrackWorkspaceStore {
       }),
 
     selectAll: () =>
-      set((state) => ({
-        selectedTrackIds: new Set(state.tracks.map((t) => t.id)),
-      })),
+      set((state) => {
+        // Оптимизация: не создаём новый Set, если все уже выбраны
+        if (state.selectedTrackIds.size === state.tracks.length) {
+          return state;
+        }
+        return {
+          selectedTrackIds: new Set(state.tracks.map((t) => t.id)),
+        };
+      }),
 
-    deselectAll: () => set({ selectedTrackIds: new Set() }),
+    deselectAll: () =>
+      set((state) => {
+        // Оптимизация: не создаём новый Set, если ничего не выбрано
+        if (state.selectedTrackIds.size === 0) {
+          return state;
+        }
+        return { selectedTrackIds: new Set() };
+      }),
 
     selectRange: (fromId: string, toId: string) => {
       const state = get();
@@ -387,6 +410,12 @@ function createStore(options: TrackWorkspaceStoreOptions): TrackWorkspaceStore {
       const start = Math.min(fromIndex, toIndex);
       const end = Math.max(fromIndex, toIndex);
       const rangeIds = new Set(state.tracks.slice(start, end + 1).map((t) => t.id));
+
+      // Оптимизация: проверяем, есть ли новые ID для добавления
+      const hasNewIds = Array.from(rangeIds).some((id) => !state.selectedTrackIds.has(id));
+      if (!hasNewIds) {
+        return; // Все ID уже выбраны
+      }
 
       set((state) => ({
         selectedTrackIds: new Set([...state.selectedTrackIds, ...rangeIds]),
@@ -477,6 +506,7 @@ function createStore(options: TrackWorkspaceStoreOptions): TrackWorkspaceStore {
     },
   });
 
+  // Create store with or without persistence
   if (shouldPersist) {
     return createWithEqualityFn<TrackWorkspaceState>()(
       persist(storeCreator, {

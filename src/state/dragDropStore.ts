@@ -125,7 +125,10 @@ export const useDragDropStore = createWithEqualityFn<DragDropState>(() => ({
         duration: track.duration,
       }));
 
-      // Транзакция: сначала добавляем в target, затем удаляем из source
+      // Транзакция: сохраняем состояние для возможного rollback
+      const targetStateBefore = targetStore.getState();
+      const targetTracksBefore = [...targetStateBefore.tracks];
+
       try {
         // Добавляем треки в target store
         if (typeof targetIndex === 'number') {
@@ -141,6 +144,13 @@ export const useDragDropStore = createWithEqualityFn<DragDropState>(() => ({
           trackIds.includes(track.id),
         );
 
+        if (tracksToRemove.length === 0) {
+          // Треки уже удалены или не найдены - откатываем изменения в target
+          logger.warn('moveTracksBetweenWorkspaces: tracks not found in source, rolling back');
+          targetStore.getState()._setTracks(targetTracksBefore);
+          return false;
+        }
+
         // Удаляем все треки, получая removeTrack один раз для эффективности
         const { removeTrack } = sourceStore.getState();
         tracksToRemove.forEach((track) => {
@@ -149,12 +159,16 @@ export const useDragDropStore = createWithEqualityFn<DragDropState>(() => ({
 
         return true;
       } catch (error) {
-        // В случае ошибки при удалении из source, треки уже добавлены в target
-        // Это не идеально, но лучше чем потеря данных
-        logger.error('moveTracksBetweenWorkspaces: error during transaction', error);
+        // В случае ошибки - откатываем изменения в target store
+        logger.error('moveTracksBetweenWorkspaces: error during transaction, rolling back', error);
+        try {
+          targetStore.getState()._setTracks(targetTracksBefore);
+        } catch (rollbackError) {
+          logger.error('moveTracksBetweenWorkspaces: rollback failed', rollbackError);
+        }
         useUIStore.getState().addNotification({
           type: 'error',
-          message: 'Error moving tracks. Some tracks may have been moved.',
+          message: 'Error moving tracks. Operation was cancelled.',
           duration: 5000,
         });
         return false;

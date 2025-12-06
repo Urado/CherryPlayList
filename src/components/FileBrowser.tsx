@@ -10,6 +10,7 @@ import { fileService } from '../services/fileService';
 import { ipcService } from '../services/ipcService';
 import { useDemoPlayerStore } from '../state/demoPlayerStore';
 import { useUIStore } from '../state/uiStore';
+import { useDebounce } from '../utils/debounce';
 import { logger } from '../utils/logger';
 
 export const FileBrowser: React.FC = () => {
@@ -129,15 +130,19 @@ export const FileBrowser: React.FC = () => {
     setPendingRevealPath(null);
   }, [items, pendingRevealPath]);
 
+  // Debounce search query to avoid excessive filtering on rapid typing
+  // For future recursive search, this will prevent excessive IPC calls
+  const debouncedSearchQuery = useDebounce(searchQuery, 300);
+
   // Filter items by search query
   const filteredItems = useMemo(() => {
-    if (!searchQuery.trim()) {
+    if (!debouncedSearchQuery.trim()) {
       return items;
     }
 
-    const query = searchQuery.toLowerCase();
+    const query = debouncedSearchQuery.toLowerCase();
     return items.filter((item) => item.name.toLowerCase().includes(query));
-  }, [items, searchQuery]);
+  }, [items, debouncedSearchQuery]);
 
   const breadcrumbs = useMemo(() => {
     if (!currentPath) return [];

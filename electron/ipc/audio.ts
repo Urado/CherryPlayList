@@ -6,6 +6,10 @@ import * as mm from 'music-metadata';
 
 import { validatePath } from '../utils/fsHelpers.js';
 
+// Maximum file size for audio playback (200 MB)
+// This prevents loading extremely large files that could cause memory issues
+const MAX_AUDIO_FILE_SIZE = 200 * 1024 * 1024; // 200 MB in bytes
+
 /**
  * Get audio file duration in seconds
  */
@@ -61,6 +65,24 @@ export function registerAudioHandlers(): void {
         return {
           success: false,
           error: 'Invalid path: path traversal detected',
+        };
+      }
+
+      // Check file existence and size before reading
+      const stats = await fs.stat(payload.path);
+      if (!stats.isFile()) {
+        return {
+          success: false,
+          error: 'Path is not a file',
+        };
+      }
+
+      if (stats.size > MAX_AUDIO_FILE_SIZE) {
+        const sizeMB = (stats.size / (1024 * 1024)).toFixed(2);
+        const maxMB = (MAX_AUDIO_FILE_SIZE / (1024 * 1024)).toFixed(0);
+        return {
+          success: false,
+          error: `File too large: ${sizeMB} MB (maximum: ${maxMB} MB)`,
         };
       }
 

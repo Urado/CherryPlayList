@@ -70,11 +70,43 @@ const INITIAL_STATE: Omit<
 export const useDemoPlayerStore = createWithEqualityFn<DemoPlayerState>((set, get) => {
   let audioElement: HTMLAudioElement | null = null;
   let currentObjectUrl: string | null = null;
+  // Store event handlers for cleanup
+  let eventHandlers: {
+    ended?: () => void;
+    timeupdate?: () => void;
+    loadedmetadata?: () => void;
+    error?: () => void;
+  } = {};
 
   const revokeCurrentObjectUrl = () => {
     if (currentObjectUrl) {
       URL.revokeObjectURL(currentObjectUrl);
       currentObjectUrl = null;
+    }
+  };
+
+  const cleanupAudioElement = () => {
+    if (audioElement) {
+      // Remove all event listeners
+      if (eventHandlers.ended) {
+        audioElement.removeEventListener('ended', eventHandlers.ended);
+      }
+      if (eventHandlers.timeupdate) {
+        audioElement.removeEventListener('timeupdate', eventHandlers.timeupdate);
+      }
+      if (eventHandlers.loadedmetadata) {
+        audioElement.removeEventListener('loadedmetadata', eventHandlers.loadedmetadata);
+      }
+      if (eventHandlers.error) {
+        audioElement.removeEventListener('error', eventHandlers.error);
+      }
+      // Clear handlers
+      eventHandlers = {};
+      // Pause and clear src
+      audioElement.pause();
+      audioElement.src = '';
+      audioElement.currentTime = 0;
+      audioElement = null;
     }
   };
 
@@ -85,22 +117,20 @@ export const useDemoPlayerStore = createWithEqualityFn<DemoPlayerState>((set, ge
       audioElement.crossOrigin = 'anonymous';
       audioElement.volume = 0.8;
 
-      audioElement.addEventListener('ended', () => {
+      // Create and store event handlers
+      eventHandlers.ended = () => {
         get().handleEnded();
-      });
-
-      audioElement.addEventListener('timeupdate', () => {
+      };
+      eventHandlers.timeupdate = () => {
         get().setPosition(audioElement?.currentTime ?? 0);
-      });
-
-      audioElement.addEventListener('loadedmetadata', () => {
+      };
+      eventHandlers.loadedmetadata = () => {
         const duration = audioElement?.duration ?? 0;
         if (Number.isFinite(duration)) {
           get().setDuration(duration);
         }
-      });
-
-      audioElement.addEventListener('error', () => {
+      };
+      eventHandlers.error = () => {
         const mediaError = audioElement?.error;
         const code = mediaError?.code;
         const errorMessages: Record<number, string> = {
@@ -113,7 +143,13 @@ export const useDemoPlayerStore = createWithEqualityFn<DemoPlayerState>((set, ge
           (code && errorMessages[code]) ||
           'Не удалось воспроизвести трек. Проверьте файл и попробуйте снова.';
         get().handleError(message, mediaError ?? undefined);
-      });
+      };
+
+      // Add event listeners
+      audioElement.addEventListener('ended', eventHandlers.ended);
+      audioElement.addEventListener('timeupdate', eventHandlers.timeupdate);
+      audioElement.addEventListener('loadedmetadata', eventHandlers.loadedmetadata);
+      audioElement.addEventListener('error', eventHandlers.error);
     }
 
     return audioElement;
@@ -203,11 +239,7 @@ export const useDemoPlayerStore = createWithEqualityFn<DemoPlayerState>((set, ge
     },
 
     clear: () => {
-      if (audioElement) {
-        audioElement.pause();
-        audioElement.src = '';
-        audioElement.currentTime = 0;
-      }
+      cleanupAudioElement();
       revokeCurrentObjectUrl();
       const preservedVolume = get().volume;
       set({ ...INITIAL_STATE, volume: preservedVolume });

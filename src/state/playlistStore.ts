@@ -280,12 +280,22 @@ const playlistStore = createWithEqualityFn<PlaylistState>((set, get) => ({
   },
 
   selectTrack: (id) =>
-    set((state) => ({
-      selectedTrackIds: new Set([...state.selectedTrackIds, id]),
-    })),
+    set((state) => {
+      // Оптимизация: не создаём новый Set, если id уже выбран
+      if (state.selectedTrackIds.has(id)) {
+        return state;
+      }
+      return {
+        selectedTrackIds: new Set([...state.selectedTrackIds, id]),
+      };
+    }),
 
   deselectTrack: (id) =>
     set((state) => {
+      // Оптимизация: не создаём новый Set, если id не выбран
+      if (!state.selectedTrackIds.has(id)) {
+        return state;
+      }
       const newSet = new Set(state.selectedTrackIds);
       newSet.delete(id);
       return { selectedTrackIds: newSet };
@@ -299,15 +309,29 @@ const playlistStore = createWithEqualityFn<PlaylistState>((set, get) => ({
       } else {
         newSet.add(id);
       }
+      // Оптимизация: возвращаем state, если Set не изменился (не должно произойти, но на всякий случай)
       return { selectedTrackIds: newSet };
     }),
 
   selectAll: () =>
-    set((state) => ({
-      selectedTrackIds: new Set(state.tracks.map((t) => t.id)),
-    })),
+    set((state) => {
+      // Оптимизация: не создаём новый Set, если все уже выбраны
+      if (state.selectedTrackIds.size === state.tracks.length) {
+        return state;
+      }
+      return {
+        selectedTrackIds: new Set(state.tracks.map((t) => t.id)),
+      };
+    }),
 
-  deselectAll: () => set({ selectedTrackIds: new Set() }),
+  deselectAll: () =>
+    set((state) => {
+      // Оптимизация: не создаём новый Set, если ничего не выбрано
+      if (state.selectedTrackIds.size === 0) {
+        return state;
+      }
+      return { selectedTrackIds: new Set() };
+    }),
 
   selectRange: (fromId: string, toId: string) => {
     const state = get();
@@ -319,6 +343,12 @@ const playlistStore = createWithEqualityFn<PlaylistState>((set, get) => ({
     const start = Math.min(fromIndex, toIndex);
     const end = Math.max(fromIndex, toIndex);
     const rangeIds = new Set(state.tracks.slice(start, end + 1).map((t) => t.id));
+
+    // Оптимизация: проверяем, есть ли новые ID для добавления
+    const hasNewIds = Array.from(rangeIds).some((id) => !state.selectedTrackIds.has(id));
+    if (!hasNewIds) {
+      return; // Все ID уже выбраны
+    }
 
     set((state) => ({
       selectedTrackIds: new Set([...state.selectedTrackIds, ...rangeIds]),
