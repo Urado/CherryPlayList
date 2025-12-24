@@ -1,17 +1,5 @@
-// Идентификация workspace
-export type WorkspaceId = string; // UUID
-
-// Типы workspace
-export type WorkspaceType =
-  | 'playlist'
-  | 'collection'
-  | 'drafts'
-  | 'fileBrowser'
-  | 'database'
-  | 'rules'
-  | 'autogenerator'
-  | 'player'
-  | string; // для будущих типов
+// Re-export from core for backward compatibility
+export type { WorkspaceId, WorkspaceType } from '@core/types/workspace';
 
 export type DraggedItems =
   | { type: 'tracks'; ids: Set<string>; sourceWorkspaceId?: WorkspaceId; isCopyMode?: boolean }

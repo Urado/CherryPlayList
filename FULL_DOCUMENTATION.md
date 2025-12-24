@@ -86,53 +86,15 @@ The system is separated into **three main layers**:
 
 ## 4.1 High-Level Component Diagram
 
-```mermaid
-flowchart TD
-
-UI[React UI Layer] --> AppLayer[Application Logic Layer]
-AppLayer --> Electron[Electron Main Process]
-
-UI --> Zustand[Zustand Stores]
-AppLayer --> Zustand
-
-Electron --> FS[File System]
-Electron --> Plugins[Plugin Loader]
-Plugins --> AppLayer
-```
+The architecture consists of three layers: React UI Layer interacts with Application Logic Layer, which in turn communicates with Electron Main Process via IPC. Both layers use Zustand Stores for state management. Electron Main Process interacts with File System and Plugin Loader.
 
 ## 4.2 Playlist Creation Workflow
 
-```mermaid
-sequenceDiagram
-    participant User
-    participant UI
-    participant Store as playlistStore
-    participant App as App Layer
-    participant FS as Electron/FS
-
-    User ->> UI: Drag file(s) onto playlist
-    UI ->> Store: addTrack(paths)
-    Store ->> App: validate + format track objects
-    UI ->> User: Playlist visually updates
-```
+User drags files onto the playlist. UI calls addTrack in the store, which validates and formats track objects. After that, UI visually updates the playlist.
 
 ## 4.3 Export Workflow
 
-```mermaid
-sequenceDiagram
-    participant User
-    participant UI
-    participant Exporter as ExportService
-    participant Electron
-    participant FS
-
-    User ->> UI: Export playlist
-    UI ->> Exporter: executeExport(tracks, options)
-    Exporter ->> Electron: IPC invoke export
-    Electron ->> FS: Copy + rename files
-    FS ->> Electron: Success
-    Electron ->> UI: Export complete
-```
+User initiates playlist export. UI calls executeExport in ExportService, which sends an IPC request to the Electron process. Electron copies and renames files in the file system, then returns the result to UI.
 
 ---
 
@@ -144,22 +106,36 @@ sequenceDiagram
     │   ├── ipc/                  # All IPC channels
     │   │   ├── export.ts
     │   │   ├── fileBrowser.ts
-    │   │   └── plugins.ts
-    │   ├── plugins/              # Plugin runtime
+    │   │   ├── audio.ts
+    │   │   ├── dialogs.ts
+    │   │   ├── playlist.ts
+    │   │   └── system.ts
     │   └── utils/                # FS helpers
     │
     ├── src/
-    │   ├── app/
+    │   ├── app/                  # Application-level components
+    │   │   ├── App.tsx
+    │   │   ├── WorkspaceRenderer.tsx
+    │   │   └── components/       # App-level components (Header, Footer, Modals)
+    │   ├── core/                 # Core types, interfaces, constants
+    │   │   ├── types/
+    │   │   ├── interfaces/
+    │   │   ├── constants/
+    │   │   └── registry/         # Workspace module registry
+    │   ├── shared/               # Shared components, services, stores
+    │   │   ├── components/
+    │   │   ├── services/
+    │   │   ├── stores/           # Zustand stores
+    │   │   ├── hooks/
+    │   │   └── utils/
+    │   ├── workspaces/           # Workspace modules (isolated)
     │   │   ├── playlist/
-    │   │   ├── export/
-    │   │   ├── plugins/
-    │   │   └── sources/
-    │   ├── components/
-    │   ├── state/                # Zustand stores
-    │   ├── services/             # Frontend logic
-    │   ├── types/
-    │   ├── hooks/
-    │   ├── utils/
+    │   │   ├── collection/
+    │   │   ├── fileBrowser/
+    │   │   └── testZone/
+    │   ├── components/           # General components (FileBrowser, SourcesPanel)
+    │   ├── modules/              # Modules (dragDrop)
+    │   ├── types/                # Additional types
     │   └── index.tsx
     │
     ├── plugins/                  # External plugin root folder
@@ -180,7 +156,7 @@ The demo player is a lightweight audio preview pipeline located in the applicati
 ### Components
 
 1. **demoPlayerStore** — orchestrates the audio element, exposes actions (`loadTrack`, `play`, `pause`, `seek`, `setVolume`, etc.), stores `position`, `duration`, `volume`, `status`, and `sourceWorkspaceId`.
-2. **DemoPlayer component** — rendered at the top of `AppHeader`; shows title, “Show in browser” button, play/pause toggle, timeline slider with live position, and volume slider. Компонент получает данные через `useDemoPlayerController` (можно подменить в тестах), проверяет путь перед вызовом “Показать в браузере” и очищает ресурсы стора при размонтировании.
+2. **DemoPlayer component** — rendered at the top of `AppHeader`; shows title, "Show in browser" button, play/pause toggle, timeline slider with live position, and volume slider. The component receives data through `useDemoPlayerController` (can be substituted in tests), validates the path before calling "Show in browser" and cleans up store resources on unmount.
 3. **Playlist/Collection buttons** — every track row owns a play button that calls `demoPlayerStore.loadTrack(track, workspaceId)` followed by `play()`.
 4. **FileBrowser bridge** — action in `uiStore` focuses the originating file path when the header button is pressed.
 
@@ -205,6 +181,7 @@ Handles playlist content.
     setName(name)
     addTrack(track)
     addTracks(trackArray)
+    addTracksAt(tracks, index)
     removeTrack(id)
     moveTrack(fromIndex, toIndex)
     clear()
@@ -222,150 +199,6 @@ Handles playlist content.
     removeSelectedTracks()
     moveSelectedTracks(toIndex)
 
-### Implementation Example
-
-```typescript
-import create from 'zustand';
-import { v4 as uuidv4 } from 'uuid';
-import { Track } from '../types/track';
-
-interface PlaylistState {
-  name: string;
-  tracks: Track[];
-  selectedTrackIds: Set<string>;
-  setName: (name: string) => void;
-  addTrack: (track: Omit<Track, 'id'>) => void;
-  addTracks: (tracks: Omit<Track, 'id'>[]) => void;
-  removeTrack: (id: string) => void;
-  moveTrack: (fromIndex: number, toIndex: number) => void;
-  clear: () => void;
-  loadFromJSON: (json: { name: string; tracks: Array<{ path: string }> }) => void;
-
-  // Track selection actions
-  selectTrack: (id: string) => void;
-  deselectTrack: (id: string) => void;
-  selectAll: () => void;
-  deselectAll: () => void;
-  toggleTrackSelection: (id: string) => void;
-  selectRange: (fromId: string, toId: string) => void;
-
-  // Batch operations
-  removeSelectedTracks: () => void;
-  moveSelectedTracks: (toIndex: number) => void;
-}
-
-export const usePlaylistStore = create<PlaylistState>((set, get) => ({
-  name: 'New Playlist',
-  tracks: [],
-  selectedTrackIds: new Set<string>(),
-
-  setName: (name) => set({ name }),
-
-  addTrack: (track) =>
-    set((state) => ({
-      tracks: [...state.tracks, { ...track, id: uuidv4() }],
-    })),
-
-  addTracks: (tracks) =>
-    set((state) => ({
-      tracks: [...state.tracks, ...tracks.map((t) => ({ ...t, id: uuidv4() }))],
-    })),
-
-  removeTrack: (id) =>
-    set((state) => ({
-      tracks: state.tracks.filter((t) => t.id !== id),
-      selectedTrackIds: new Set(
-        [...state.selectedTrackIds].filter((selectedId) => selectedId !== id),
-      ),
-    })),
-
-  moveTrack: (fromIndex, toIndex) =>
-    set((state) => {
-      const newTracks = [...state.tracks];
-      const [moved] = newTracks.splice(fromIndex, 1);
-      newTracks.splice(toIndex, 0, moved);
-      return { tracks: newTracks };
-    }),
-
-  clear: () => set({ name: 'New Playlist', tracks: [], selectedTrackIds: new Set() }),
-
-  loadFromJSON: (json) =>
-    set({
-      name: json.name,
-      tracks: json.tracks.map((t) => ({
-        id: uuidv4(),
-        path: t.path,
-        name: t.path.split(/[/\\]/).pop() || 'Unknown',
-      })),
-      selectedTrackIds: new Set(),
-    }),
-
-  // Selection actions
-  selectTrack: (id) =>
-    set((state) => ({
-      selectedTrackIds: new Set([...state.selectedTrackIds, id]),
-    })),
-
-  deselectTrack: (id) =>
-    set((state) => {
-      const newSet = new Set(state.selectedTrackIds);
-      newSet.delete(id);
-      return { selectedTrackIds: newSet };
-    }),
-
-  selectAll: () =>
-    set((state) => ({
-      selectedTrackIds: new Set(state.tracks.map((t) => t.id)),
-    })),
-
-  deselectAll: () => set({ selectedTrackIds: new Set() }),
-
-  toggleTrackSelection: (id) =>
-    set((state) => {
-      const newSet = new Set(state.selectedTrackIds);
-      if (newSet.has(id)) {
-        newSet.delete(id);
-      } else {
-        newSet.add(id);
-      }
-      return { selectedTrackIds: newSet };
-    }),
-
-  selectRange: (fromId, toId) =>
-    set((state) => {
-      const fromIndex = state.tracks.findIndex((t) => t.id === fromId);
-      const toIndex = state.tracks.findIndex((t) => t.id === toId);
-      if (fromIndex === -1 || toIndex === -1) return state;
-
-      const start = Math.min(fromIndex, toIndex);
-      const end = Math.max(fromIndex, toIndex);
-      const rangeIds = state.tracks.slice(start, end + 1).map((t) => t.id);
-
-      return {
-        selectedTrackIds: new Set([...state.selectedTrackIds, ...rangeIds]),
-      };
-    }),
-
-  // Batch operations
-  removeSelectedTracks: () =>
-    set((state) => ({
-      tracks: state.tracks.filter((t) => !state.selectedTrackIds.has(t.id)),
-      selectedTrackIds: new Set(),
-    })),
-
-  moveSelectedTracks: (toIndex) =>
-    set((state) => {
-      const selected = state.tracks.filter((t) => state.selectedTrackIds.has(t.id));
-      const unselected = state.tracks.filter((t) => !state.selectedTrackIds.has(t.id));
-
-      // Insert selected tracks at target index, preserving their relative order
-      const newTracks = [...unselected];
-      newTracks.splice(toIndex, 0, ...selected);
-
-      return { tracks: newTracks };
-    }),
-}));
-```
 
 ---
 
@@ -376,11 +209,12 @@ Handles interface operations and global workspace management.
 ### State
 
     {
-      activeSourcePanel: string
+      activeSource: 'fileBrowser' | 'playlists' | 'db'
       modal: null | { type: string, payload: any }
       notifications: Notification[]
       dragging: boolean
       draggedItems: DraggedItems | null  // Global state for drag-and-drop operations
+      fileBrowserFocusRequest: { path: string; timestamp: number } | null  // Request to focus file in browser
       workspaces: WorkspaceInfo[]  // List of all registered workspaces
       activeWorkspaceId: WorkspaceId | null  // Currently active workspace
     }
@@ -402,97 +236,22 @@ The `draggedItems` state is stored globally in `uiStore` to enable cross-workspa
 - `{ type: 'files'; paths: string[] }` - Dragged files from file browser
 - `null` - No active drag operation
 
-### Implementation Example
+### File Browser Focus
 
-```typescript
-import create from 'zustand';
+The `fileBrowserFocusRequest` state is used to request focusing a specific file in the FileBrowser component. When set, it contains:
+- `path: string` - Path to the file that should be focused
+- `timestamp: number` - Timestamp when the request was made (used to detect new requests)
 
-interface Notification {
-  id: string;
-  message: string;
-  type: 'success' | 'error' | 'info';
-  timestamp: number;
-}
+**Methods:**
+- `focusFileInBrowser(path: string)` - Requests focus on a file in FileBrowser. Sets `activeSource` to 'fileBrowser' and creates a focus request.
+- `acknowledgeFileBrowserFocus()` - Clears the focus request after it has been processed by FileBrowser component.
 
-interface UIState {
-  activeSourcePanel: string;
-  modal: null | { type: string; payload: any };
-  notifications: Notification[];
-  dragging: boolean;
-  setActiveSourcePanel: (panel: string) => void;
-  openModal: (type: string, payload?: any) => void;
-  closeModal: () => void;
-  addNotification: (message: string, type: Notification['type']) => void;
-  removeNotification: (id: string) => void;
-  setDragging: (dragging: boolean) => void;
-}
-
-export const useUIStore = create<UIState>((set) => ({
-  activeSourcePanel: 'fileBrowser',
-  modal: null,
-  notifications: [],
-  dragging: false,
-
-  setActiveSourcePanel: (panel) => set({ activeSourcePanel: panel }),
-
-  openModal: (type, payload) => set({ modal: { type, payload } }),
-
-  closeModal: () => set({ modal: null }),
-
-  addNotification: (message, type) =>
-    set((state) => ({
-      notifications: [
-        ...state.notifications,
-        {
-          id: Date.now().toString(),
-          message,
-          type,
-          timestamp: Date.now(),
-        },
-      ],
-    })),
-
-  removeNotification: (id) =>
-    set((state) => ({
-      notifications: state.notifications.filter((n) => n.id !== id),
-    })),
-
-  setDragging: (dragging) => set({ dragging }),
-
-  // Workspace management
-  addWorkspace: (workspace) => {
-    const state = get();
-    if (state.workspaces.some((w) => w.id === workspace.id)) {
-      return;
-    }
-    registerWorkspaceType(workspace.id, workspace.type);
-    set({
-      workspaces: [...state.workspaces, workspace],
-    });
-  },
-
-  removeWorkspace: (id) => {
-    const state = get();
-    unregisterWorkspaceType(id);
-    set({
-      workspaces: state.workspaces.filter((w) => w.id !== id),
-      activeWorkspaceId: state.activeWorkspaceId === id ? null : state.activeWorkspaceId,
-    });
-  },
-
-  // Global drag state management
-  setDraggedItems: (updater) =>
-    set((state) => ({
-      draggedItems: typeof updater === 'function' ? updater(state.draggedItems) : updater,
-    })),
-}));
-```
 
 ---
 
 ## 6.3 dragDropStore
 
-**Location**: `src/state/dragDropStore.ts`
+**Location**: `src/shared/stores/dragDropStore.ts`
 
 Centralized store for managing cross-workspace drag-and-drop operations. This store is **completely workspace-agnostic** - it works with any track-based workspace registered via `trackWorkspaceStoreFactory`, without hardcoded dependencies on specific workspace types (playlists, collections, etc.).
 
@@ -509,23 +268,9 @@ The `dragDropStore` decouples drag-and-drop logic from individual workspace comp
 
 ### Methods
 
-```typescript
-interface DragDropState {
-  moveTracksBetweenWorkspaces: (
-    trackIds: string[],
-    sourceWorkspaceId: WorkspaceId,
-    targetWorkspaceId: WorkspaceId,
-    targetIndex?: number,
-  ) => boolean;
+`moveTracksBetweenWorkspaces` - moves tracks between workspaces. Accepts an array of track IDs, source and target workspace IDs, and an optional insertion index. Returns true on success, false on error.
 
-  copyTracksBetweenWorkspaces: (
-    trackIds: string[],
-    sourceWorkspaceId: WorkspaceId,
-    targetWorkspaceId: WorkspaceId,
-    targetIndex?: number,
-  ) => boolean;
-}
-```
+`copyTracksBetweenWorkspaces` - copies tracks between workspaces. Accepts the same parameters as moveTracksBetweenWorkspaces. Returns true on success, false on error.
 
 ### Implementation Details
 
@@ -550,32 +295,13 @@ interface DragDropState {
 
 ### Usage
 
-```typescript
-import { useDragDropStore } from './state/dragDropStore';
-
-const { moveTracksBetweenWorkspaces, copyTracksBetweenWorkspaces } = useDragDropStore();
-
-// Move tracks from collection to playlist
-moveTracksBetweenWorkspaces(
-  ['track-id-1', 'track-id-2'],
-  'collection-workspace-id',
-  'default-playlist-workspace',
-  0, // Insert at beginning
-);
-
-// Copy tracks with Ctrl+Drag
-copyTracksBetweenWorkspaces(
-  ['track-id-1'],
-  'collection-workspace-id',
-  'default-playlist-workspace',
-);
-```
+The store is used through the `useDragDropStore()` hook. Methods `moveTracksBetweenWorkspaces` and `copyTracksBetweenWorkspaces` are called with an array of track IDs, source and target workspace IDs, and an optional insertion index. For copying, the `copyTracksBetweenWorkspaces` method is used, which creates new track objects with new IDs.
 
 ---
 
 ## 6.4 trackWorkspaceStoreFactory
 
-**Location**: `src/state/trackWorkspaceStoreFactory.ts`
+**Location**: `src/shared/stores/trackWorkspaceStoreFactory.ts`
 
 Factory for creating and managing Zustand stores for track-based workspaces (playlists, collections, etc.). This factory ensures consistent store structure and provides centralized registration for cross-workspace operations.
 
@@ -588,30 +314,17 @@ Factory for creating and managing Zustand stores for track-based workspaces (pla
 
 ### Functions
 
-```typescript
-// Create or get existing store for a workspace
-function ensureTrackWorkspaceStore(options: TrackWorkspaceStoreOptions): TrackWorkspaceStore;
+`ensureTrackWorkspaceStore(options)` - creates or retrieves an existing store for a workspace. Accepts options with workspaceId, initialName, maxTracks, and historyDepth.
 
-// Get store by workspace ID
-function getTrackWorkspaceStore(workspaceId: WorkspaceId): TrackWorkspaceStore | undefined;
+`getTrackWorkspaceStore(workspaceId)` - retrieves a store by workspace ID. Returns the store or undefined if not found.
 
-// Register an existing store (for main playlist)
-function registerTrackWorkspaceStore(workspaceId: WorkspaceId, store: TrackWorkspaceStore): void;
+`registerTrackWorkspaceStore(workspaceId, store)` - registers an existing store (used for the main playlist).
 
-// Get all registered stores (for debugging)
-function getAllTrackWorkspaceStores(): Map<WorkspaceId, TrackWorkspaceStore>;
-```
+`getAllTrackWorkspaceStores()` - returns all registered stores (for debugging).
 
 ### Store Options
 
-```typescript
-interface TrackWorkspaceStoreOptions {
-  workspaceId: WorkspaceId; // Unique workspace identifier
-  initialName?: string; // Initial name (default: 'New Workspace')
-  maxTracks?: number | null; // Maximum tracks (null = unlimited, default: 150)
-  historyDepth?: number; // Undo/redo history depth (default: 50)
-}
-```
+Options for creating a store include: `workspaceId` (unique identifier), `initialName` (initial name, default 'New Workspace'), `maxTracks` (maximum number of tracks, null = unlimited, default null), `historyDepth` (undo/redo history depth, default 50).
 
 ### Store Interface
 
@@ -625,20 +338,7 @@ All stores created by the factory implement `TrackWorkspaceState`, which include
 
 ### Usage Example
 
-```typescript
-import { ensureTrackWorkspaceStore } from './state/trackWorkspaceStoreFactory';
-
-// Create store for a collection
-const collectionStore = ensureTrackWorkspaceStore({
-  workspaceId: 'collection-123',
-  initialName: 'My Collection',
-  maxTracks: null, // Unlimited
-  historyDepth: 50,
-});
-
-// Use the store
-const { tracks, addTrack, removeTrack } = collectionStore();
-```
+To create a collection store, `ensureTrackWorkspaceStore()` is used with options: workspaceId, initialName, maxTracks (null for unlimited), historyDepth. The store returns an object with methods for working with tracks: tracks, addTrack, removeTrack, and others.
 
 ---
 
@@ -657,6 +357,15 @@ Handles app preferences including UI customization and export settings.
       showHourDividers: boolean
     }
 
+### Default Values
+
+- `exportPath: ''` - Empty string (user must select folder)
+- `exportStrategy: 'copyWithNumberPrefix'` - Default export strategy
+- `lastOpenedPlaylist: ''` - Empty string (no playlist loaded)
+- `trackItemSizePreset: 'medium'` - Default size preset
+- `hourDividerInterval: 3600` - 1 hour in seconds (default)
+- `showHourDividers: true` - Dividers enabled by default
+
 ### Track Item Size Presets
 
 - `small`: padding 8px, margin 2px
@@ -672,63 +381,6 @@ Common interval values (in seconds):
 - `7200` - 2 hours
 - `10800` - 3 hours
 
-### Implementation Example
-
-```typescript
-import { persist } from 'zustand/middleware';
-import { createWithEqualityFn } from 'zustand/traditional';
-
-interface SettingsState {
-  exportPath: string;
-  exportStrategy: 'copyWithNumberPrefix' | 'aimpPlaylist';
-  lastOpenedPlaylist: string;
-  trackItemSizePreset: 'small' | 'medium' | 'large';
-  hourDividerInterval: number;
-  showHourDividers: boolean;
-  
-  setExportPath: (path: string) => void;
-  setExportStrategy: (strategy: 'copyWithNumberPrefix' | 'aimpPlaylist') => void;
-  setLastOpenedPlaylist: (path: string) => void;
-  setTrackItemSizePreset: (preset: 'small' | 'medium' | 'large') => void;
-  setHourDividerInterval: (interval: number) => void;
-  setShowHourDividers: (show: boolean) => void;
-}
-
-export const useSettingsStore = createWithEqualityFn<SettingsState>()(
-  persist(
-    (set) => ({
-      exportPath: '',
-      exportStrategy: 'copyWithNumberPrefix',
-      lastOpenedPlaylist: '',
-      trackItemSizePreset: 'medium',
-      hourDividerInterval: 3600,
-      showHourDividers: true,
-
-      setExportPath: (path) => set({ exportPath: path }),
-      setExportStrategy: (strategy) => set({ exportStrategy: strategy }),
-      setLastOpenedPlaylist: (path) => set({ lastOpenedPlaylist: path }),
-      setTrackItemSizePreset: (preset) => set({ trackItemSizePreset: preset }),
-      setHourDividerInterval: (interval) => set({ hourDividerInterval: interval }),
-      setShowHourDividers: (show) => set({ showHourDividers: show }),
-    }),
-    {
-      name: 'cherryplaylist-settings',
-      version: 2,
-      migrate: (persistedState: unknown, version: number) => {
-        if (version === 1) {
-          const state = persistedState as Partial<SettingsState>;
-          return {
-            ...state,
-            trackItemSizePreset: 'medium',
-            hourDividerInterval: 3600,
-            showHourDividers: true,
-          };
-        }
-        return persistedState;
-      },
-    },
-  ),
-);
 
 ## 6.6 demoPlayerStore
 
@@ -736,131 +388,153 @@ Handles playback state for the demo audio player.
 
 ### State
 
-```
+State includes: `currentTrack` (Track or null), `sourceWorkspaceId` (WorkspaceId or null), `status` ('idle' | 'playing' | 'paused' | 'ended'), `position` (seconds, float), `duration` (seconds, float), `volume` (0..1), `error` (string or null).
 
-{
-currentTrack: Track | null
-sourceWorkspaceId: WorkspaceId | null
-status: 'idle' | 'playing' | 'paused' | 'ended'
-position: number // seconds (float)
-duration: number // seconds (float)
-volume: number // 0..1
-error: string | null
-}
-
-```
-
-Internal (non-serialized) members:
-
-- `audioElement: HTMLAudioElement` — создается лениво на стороне стора и обрабатывает события `ended/timeupdate/loadedmetadata/error`.
-- `currentObjectUrl: string | null` — активный объект URL, который очищается при загрузке нового трека или `clear()`.
+Internal (non-serialized) members: `audioElement` (HTMLAudioElement, created lazily on the store side and handles ended/timeupdate/loadedmetadata/error events), `currentObjectUrl` (string or null, active object URL that is cleared when loading a new track or on clear()).
 
 ### Actions
 
-```
-
-loadTrack(track: Track, sourceWorkspaceId: WorkspaceId): Promise<void>
-play(): Promise<void>
-pause(): void
-seek(positionSeconds: number): void
-setVolume(value: number): void
-setDuration(value: number): void // invoked on loadedmetadata
-handleEnded(): void // reset status/position to ended state
-handleError(message: string): void // stores message + logs detailed error
-clear(): void // stops playback, сбрасывает состояние и отзываeт текущий object URL
-
-```
+Methods: `loadTrack(track, sourceWorkspaceId)` - loads a track, `play()` - plays, `pause()` - pauses, `seek(positionSeconds)` - seeks, `setVolume(value)` - sets volume, `setDuration(value)` - invoked on loadedmetadata, `handleEnded()` - resets status/position to ended state, `handleError(message)` - stores message and logs detailed error, `clear()` - stops playback, resets state and revokes current object URL.
 
 ### Behavior Notes
 
-- `loadTrack` always resets playback to the start; previous track is discarded and object URLs are revoked to avoid leaks.
-- When playback finishes naturally, status switches to `ended`, and the play button restarts from the beginning.
-- Errors contain concise text for notifications; the underlying `Error` object is logged via `logger.error`.
-- Store emits Zustand subscriptions that keep the header player UI in sync with actual audio element events (`timeupdate`, `loadedmetadata`, `ended`, `error`).
-```
+`loadTrack` always resets playback to the start; previous track is discarded and object URLs are revoked to avoid leaks. When playback finishes naturally, status switches to 'ended', and the play button restarts from the beginning. Errors contain concise text for notifications; the underlying Error object is logged via logger.error. Store emits Zustand subscriptions that keep the header player UI in sync with actual audio element events (timeupdate, loadedmetadata, ended, error).
 
 ---
 
-# 6.4 IPC Service Example
+# 6.4 IPC Service
 
-```typescript
-// src/services/ipcService.ts
-interface IPCResponse<T> {
-  success: boolean;
-  data?: T;
-  error?: string;
-}
+**Location**: `src/shared/services/ipcService.ts`
 
-class IPCService {
-  async invoke<T>(channel: string, payload?: any): Promise<T> {
-    if (!window.api) {
-      throw new Error('IPC API not available');
-    }
+IPCService provides methods for interacting with Electron main process via IPC. All methods return promises and handle errors automatically, showing notifications on failure.
 
-    try {
-      const response: IPCResponse<T> = await window.api.invoke(channel, payload);
-      if (!response.success) {
-        throw new Error(response.error || 'IPC call failed');
-      }
-      return response.data as T;
-    } catch (error) {
-      console.error(`IPC call failed: ${channel}`, error);
-      throw error;
-    }
-  }
+## Core Method
 
-  async listDirectory(path: string) {
-    return this.invoke<Array<{ name: string; path: string; isDirectory: boolean }>>(
-      'fileBrowser:listDirectory',
-      { path },
-    );
-  }
+### `invoke<T>(channel: string, payload?: any, showNotification?: boolean): Promise<T>`
 
-  async exportPlaylist(tracks: Track[], targetPath: string, strategy: string) {
-    return this.invoke<{ success: boolean; failed: string[] }>('export:execute', {
-      tracks,
-      targetPath,
-      strategy,
-    });
-  }
+Generic method for IPC communication. All other methods use this internally.
 
-  // Get audio file duration
-  async getAudioDuration(path: string): Promise<number> {
-    return this.invoke<number>('audio:getDuration', { path });
-  }
+- `channel` - IPC channel name (must be whitelisted in `electron/preload.ts`)
+- `payload` - Optional data to send to main process
+- `showNotification` - Whether to show error notification (default: `true`)
+- Returns: Promise with response data of type `T`
 
-  // Export to AIMP format
-  async exportAIMPPlaylist(tracks: Track[], targetPath: string, playlistName: string) {
-    return this.invoke<{ success: boolean; playlistPath: string; failed: string[] }>(
-      'export:aimp',
-      { tracks, targetPath, playlistName },
-    );
-  }
-}
+## File Browser Methods
 
-export const ipcService = new IPCService();
-```
+### `listDirectory(path: string): Promise<DirectoryItem[]>`
+
+Lists contents of a directory.
+
+- Returns array of `DirectoryItem` objects with `name`, `path`, `isDirectory`, and optional `size`
+
+### `statFile(path: string): Promise<{ size: number; modified: number; isDirectory: boolean }>`
+
+Gets file or directory statistics.
+
+### `findAudioFilesRecursive(path: string): Promise<string[]>`
+
+Recursively finds all audio files in a directory and subdirectories.
+
+- Returns array of file paths
+
+## Audio Methods
+
+### `getAudioDuration(path: string): Promise<number>`
+
+Gets audio file duration in seconds using `music-metadata` library.
+
+### `getAudioFileSource(path: string, showNotification?: boolean): Promise<AudioFileSource>`
+
+Gets audio file contents as base64 buffer for secure playback in renderer process.
+
+- Returns: `{ buffer: string, mimeType: string }`
+- Used by demo player for loading tracks
+
+## Dialog Methods
+
+### `showFolderDialog(options?: { title?: string; defaultPath?: string }): Promise<string | null>`
+
+Shows folder selection dialog.
+
+- Returns selected folder path or `null` if cancelled
+
+### `showSaveDialog(options?: { title?: string; defaultPath?: string; filters?: Array<{ name: string; extensions: string[] }> }): Promise<string | null>`
+
+Shows save file dialog.
+
+- Returns selected file path or `null` if cancelled
+
+### `showOpenFileDialog(options?: { title?: string; defaultPath?: string; filters?: Array<{ name: string; extensions: string[] }> }): Promise<string | null>`
+
+Shows open file dialog.
+
+- Returns selected file path or `null` if cancelled
+
+## System Methods
+
+### `getSystemPath(name: string): Promise<string>`
+
+Gets system path (documents, music, downloads, etc.).
+
+- `name` - System path name (e.g., 'documents', 'music', 'downloads')
+
+## IPC Channels
+
+All IPC channels are whitelisted in `electron/preload.ts` for security. Only whitelisted channels can be invoked from renderer process.
+
+### File Browser Channels
+
+- `fileBrowser:listDirectory` - List directory contents
+- `fileBrowser:statFile` - Get file/directory statistics
+- `fileBrowser:findAudioFilesRecursive` - Recursively find audio files
+
+### Audio Channels
+
+- `audio:getDuration` - Get audio file duration
+- `audio:getFileSource` - Get audio file as base64 buffer
+
+### Export Channels
+
+- `export:execute` - Execute export with number prefix strategy
+- `export:copyFile` - Copy single file (internal use)
+- `export:aimp` - Export playlist to AIMP format (M3U8)
+- `export:copyTracksToFolder` - Copy tracks to folder with original names
+
+### Playlist Channels
+
+- `playlist:save` - Save playlist to JSON file
+- `playlist:load` - Load playlist from JSON file
+
+### Dialog Channels
+
+- `dialog:showOpenDialog` - Show folder selection dialog
+- `dialog:showSaveDialog` - Show save file dialog
+- `dialog:showOpenFileDialog` - Show open file dialog
+
+### System Channels
+
+- `system:getPath` - Get system path (documents, music, etc.)
 
 ## 6.5 Component Example
 
 ### PlaylistView Component
 
-**Location**: `src/components/PlaylistView.tsx`
+**Location**: `src/workspaces/playlist/PlaylistView.tsx`
 
-Основной компонент для отображения и редактирования плейлиста. Реализует drag-and-drop функциональность для перестановки треков с использованием нативного HTML5 Drag and Drop API.
+Main component for displaying and editing playlists. Implements drag-and-drop functionality for reordering tracks using native HTML5 Drag and Drop API.
 
 **Key Features:**
 
-- Отображение списка треков из `playlistStore`
-- Редактирование названия плейлиста
-- Drag-and-drop для перестановки треков
-- Визуальный индикатор места вставки (синяя линия)
-- Выделение треков и массовые операции
-- Отображение общей длительности плейлиста
+- Display list of tracks from `playlistStore`
+- Edit playlist name
+- Drag-and-drop for reordering tracks
+- Visual insertion point indicator (blue line)
+- Track selection and batch operations
+- Display total playlist duration
 
 **Drag-and-Drop Implementation:**
 
-Компонент использует нативный HTML5 Drag and Drop API без внешних библиотек. Поддерживает перетаскивание треков внутри плейлиста, добавление файлов из FileBrowser, и **cross-workspace drag-and-drop** (перемещение треков между плейлистами и коллекциями).
+The component uses native HTML5 Drag and Drop API without external libraries. Supports dragging tracks within the playlist, adding files from FileBrowser, and **cross-workspace drag-and-drop** (moving tracks between playlists and collections).
 
 **Unified Drag-and-Drop System:**
 
@@ -876,522 +550,64 @@ Key architectural principles:
 - **Hook Abstraction**: `useTrackWorkspaceDragAndDrop` works for any track-based workspace - just pass `workspaceId`
 
 1. **State Management:**
-   - `draggedItems`: Единое состояние для всех типов перетаскивания:
-     - `{ type: 'tracks'; ids: Set<string>; sourceWorkspaceId?: WorkspaceId; isCopyMode?: boolean }` - перетаскиваемые треки (поддерживает групповое перетаскивание)
-       - `sourceWorkspaceId`: Идентификатор workspace, из которого перетаскиваются треки (для определения cross-workspace операций)
-       - `isCopyMode`: Состояние клавиши Ctrl/Cmd (определяется в `handleDragOver`, сохраняется для использования в `handleDrop`, так как `e.ctrlKey` может быть недоступен в событии drop)
-     - `{ type: 'files'; paths: string[] }` - перетаскиваемые файлы из FileBrowser
-     - `null` - нет активного перетаскивания
-   - `dragOverId`: ID трека, над которым находится курсор (или null для пустого места)
-   - `insertPosition`: Позиция вставки ('top' | 'bottom' | null) относительно элемента
+   - `draggedItems`: Unified state for all drag types:
+     - `{ type: 'tracks'; ids: Set<string>; sourceWorkspaceId?: WorkspaceId; isCopyMode?: boolean }` - dragged tracks (supports group dragging)
+       - `sourceWorkspaceId`: Workspace identifier from which tracks are dragged (for determining cross-workspace operations)
+       - `isCopyMode`: Ctrl/Cmd key state (determined in `handleDragOver`, saved for use in `handleDrop`, as `e.ctrlKey` may be unavailable in drop event)
+     - `{ type: 'files'; paths: string[] }` - dragged files from FileBrowser
+     - `null` - no active dragging
+   - `dragOverId`: ID of the track over which the cursor is located (or null for empty space)
+   - `insertPosition`: Insertion position ('top' | 'bottom' | null) relative to the element
 
 2. **Event Handlers:**
-   - `handleDragStart(e, trackId)`: Инициализирует перетаскивание трека. Если перетаскиваемый трек выделен вместе с другими, перетаскиваются все выделенные треки. Иначе перетаскивается только один трек. Устанавливает `draggedItems` с типом 'tracks', включая `sourceWorkspaceId` текущего workspace для определения cross-workspace операций. Устанавливает `e.dataTransfer.effectAllowed = 'copyMove'` для разрешения операций копирования и перемещения.
-   - `handleDragOver(e, context: DropContext)`: Определяет позицию курсора относительно элемента (верхняя/нижняя половина), обновляет визуальный индикатор. Для cross-workspace операций определяет состояние клавиши Ctrl/Cmd (`e.ctrlKey || e.metaKey`) и сохраняет его в `draggedItems.isCopyMode` (так как `e.ctrlKey` может быть недоступен в событии drop). Обновляет `dropEffect` на 'copy' или 'move' в зависимости от `isCopyMode`. Поддерживает как треки, так и файлы. Для файлов устанавливает `draggedItems` с типом 'files'. Не показывает индикатор над перетаскиваемыми треками.
-   - `handleDrop(e, context: DropContext)`: Обрабатывает drop операцию. Использует сохраненное значение `isCopyMode` из `draggedItems` (не `e.ctrlKey`) для определения копирования или перемещения. Определяет тип перетаскивания из `dataTransfer.types`. Вычисляет финальный индекс вставки с учетом позиции и смещения. Поддерживает как одиночное перемещение (`moveTrack`), так и групповое (`moveSelectedTracks`). Для cross-workspace операций использует методы `dragDropStore`. Для файлов использует `addTracksAt`.
-   - `handleDragEnd()`: Очищает состояние перетаскивания (без параметров, так как opacity восстанавливается через CSS класс)
+   - `handleDragStart(e, trackId)`: Initializes track dragging. If the dragged track is selected together with others, all selected tracks are dragged. Otherwise, only one track is dragged. Sets `draggedItems` with type 'tracks', including `sourceWorkspaceId` of the current workspace for determining cross-workspace operations. Sets `e.dataTransfer.effectAllowed = 'copyMove'` to allow copy and move operations.
+   - `handleDragOver(e, context: DropContext)`: Determines cursor position relative to the element (upper/lower half), updates visual indicator. For cross-workspace operations, determines Ctrl/Cmd key state (`e.ctrlKey || e.metaKey`) and saves it in `draggedItems.isCopyMode` (as `e.ctrlKey` may be unavailable in drop event). Updates `dropEffect` to 'copy' or 'move' depending on `isCopyMode`. Supports both tracks and files. For files, sets `draggedItems` with type 'files'. Does not show indicator over dragged tracks.
+   - `handleDrop(e, context: DropContext)`: Handles drop operation. Uses saved `isCopyMode` value from `draggedItems` (not `e.ctrlKey`) to determine copy or move. Determines drag type from `dataTransfer.types`. Calculates final insertion index considering position and offset. Supports both single move (`moveTrack`) and group move (`moveSelectedTracks`). For cross-workspace operations, uses `dragDropStore` methods. For files, uses `addTracksAt`.
+   - `handleDragEnd()`: Clears drag state (no parameters, as opacity is restored via CSS class)
 3. **Container Event Handlers:**
-   - `onDragOver` (контейнер): Обрабатывает перетаскивание в пустое место контейнера. Определяет тип перетаскивания из `dataTransfer.types`. Для файлов и треков сбрасывает `dragOverId` и `insertPosition`, чтобы разрешить drop в пустое место.
-   - `onDragLeave` (контейнер): Проверяет, что курсор действительно покинул область контейнера (не перешел на дочерний элемент), используя `relatedTarget` и координаты.
-   - `onDrop` (контейнер): Обрабатывает drop в пустое место контейнера. Для файлов добавляет их в конец через `addTracks()`. Для треков перемещает их в конец списка.
+   - `onDragOver` (container): Handles dragging into empty container space. Determines drag type from `dataTransfer.types`. For files and tracks, resets `dragOverId` and `insertPosition` to allow drop in empty space.
+   - `onDragLeave` (container): Checks that cursor has actually left the container area (not moved to a child element), using `relatedTarget` and coordinates.
+   - `onDrop` (container): Handles drop in empty container space. For files, adds them to the end via `addTracks()`. For tracks, moves them to the end of the list.
 
 4. **Visual Feedback:**
-   - Все перетаскиваемые элементы становятся полупрозрачными (opacity: 0.5) - поддерживается групповое перетаскивание
-   - Синяя линия-индикатор (`drag-insert-line`) отображается в месте вставки
-   - Линия появляется сверху или снизу элемента в зависимости от позиции курсора
-   - Линия показывается только для треков, не для файлов (файлы не имеют визуального индикатора в пустом месте)
-   - Анимация пульсации линии для лучшей видимости
-   - Индикатор не показывается над перетаскиваемыми треками
+   - All dragged elements become semi-transparent (opacity: 0.5) - group dragging is supported
+   - Blue line indicator (`drag-insert-line`) is displayed at the insertion point
+   - Line appears above or below the element depending on cursor position
+   - Line is shown only for tracks, not for files (files don't have visual indicator in empty space)
+   - Pulsing animation of the line for better visibility
+   - Indicator is not shown over dragged tracks
 
 5. **Index Calculation Logic:**
 
-   **Для одиночного перемещения трека:**
+   **For single track move:**
 
-   ```typescript
-   // Вычисляем финальный индекс вставки
-   let finalIndex = dropIndex;
-   if (insertPosition === 'bottom') {
-     finalIndex = dropIndex + 1;
-   }
+   Calculate final insertion index. If insertPosition is 'bottom', increment dropIndex. Adjust index considering move direction: when moving element down (oldIndex < dropIndex), after removing the element, all elements after oldIndex shift up by 1 position, so subtract 1 from finalIndex. Limit index to list range.
 
-   // Корректируем индекс с учетом направления перемещения
-   // Когда перемещаем элемент вниз (oldIndex < dropIndex), после удаления элемента
-   // все элементы после oldIndex сдвигаются вверх на 1 позицию
-   if (oldIndex < dropIndex) {
-     finalIndex -= 1; // Учитываем смещение
-   }
+   **For group track move:**
 
-   // Ограничиваем индекс диапазоном списка
-   finalIndex = Math.max(0, Math.min(finalIndex, tracks.length - 1));
-   ```
+   Calculate final insertion index. If insertPosition is 'bottom', increment dropIndex. Count how many dragged tracks are before the insertion point. Adjust index by subtracting the number of dragged tracks that are already before the insertion point. Limit index to range (considering group size).
 
-   **Для группового перемещения треков:**
-
-   ```typescript
-   // Вычисляем финальный индекс вставки
-   let finalIndex = dropIndex;
-   if (insertPosition === 'bottom') {
-     finalIndex = dropIndex + 1;
-   }
-
-   // Подсчитываем, сколько перетаскиваемых треков находится до точки вставки
-   let selectedBeforeInsert = 0;
-   for (let i = 0; i < finalIndex && i < tracks.length; i++) {
-     if (draggedItems.ids.has(tracks[i].id)) {
-       selectedBeforeInsert++;
-     }
-   }
-
-   // Корректируем индекс: вычитаем количество перетаскиваемых треков,
-   // которые уже находятся до точки вставки
-   finalIndex -= selectedBeforeInsert;
-
-   // Ограничиваем индекс диапазоном (учитываем размер группы)
-   const maxIndex = Math.max(0, tracks.length - draggedItems.ids.size);
-   finalIndex = Math.max(0, Math.min(finalIndex, maxIndex));
-   ```
-
-   **Для файлов:**
-   - При drop на элемент трека: используется `insertPosition` для определения позиции
-   - При drop в пустое место: файлы добавляются в конец через `addTracks()`
+   **For files:**
+   - On drop on track element: `insertPosition` is used to determine position
+   - On drop in empty space: files are added to the end via `addTracks()`
 
 6. **Group Drag-and-Drop:**
-   - Если перетаскиваемый трек выделен вместе с другими треками, перетаскиваются все выделенные треки
-   - Относительный порядок выделенных треков сохраняется при перемещении
-   - Все перетаскиваемые треки визуально выделяются (полупрозрачные)
-   - Используется метод `moveSelectedTracks(toIndex)` из store для группового перемещения
+   - If the dragged track is selected together with other tracks, all selected tracks are dragged
+   - Relative order of selected tracks is preserved when moving
+   - All dragged tracks are visually highlighted (semi-transparent)
+   - `moveSelectedTracks(toIndex)` method from store is used for group move
 
 7. **File Drag-and-Drop from FileBrowser:**
-   - Файлы из FileBrowser перетаскиваются с типом `application/json` в `dataTransfer`
-   - При drop на элемент трека: файлы вставляются в позицию элемента через `addTracksAt(finalIndex)`
-   - При drop в пустое место контейнера: файлы добавляются в конец через `addTracks()`
-   - `draggedItems` устанавливается в `handleDragOver` для элементов треков или в `handleDrop` если не установлен
+   - Files from FileBrowser are dragged with type `application/json` in `dataTransfer`
+   - On drop on track element: files are inserted at element position via `addTracksAt(finalIndex)`
+   - On drop in empty container space: files are added to the end via `addTracks()`
+   - `draggedItems` is set in `handleDragOver` for track elements or in `handleDrop` if not set
 
-**Example Code:**
-
-```typescript
-// src/components/PlaylistView.tsx
-import React, { useState } from 'react';
-import { usePlaylistStore } from '../state/playlistStore';
-import { PlaylistItem } from './PlaylistItem';
-
-export const PlaylistView: React.FC = () => {
-  const {
-    name,
-    tracks,
-    selectedTrackIds,
-    setName,
-    moveTrack,
-    removeTrack,
-    addTracks,
-    addTracksAt,
-    toggleTrackSelection,
-    selectAll,
-    deselectAll,
-    removeSelectedTracks,
-    moveSelectedTracks,
-  } = usePlaylistStore();
-
-  // Единое состояние для всех типов перетаскивания
-  type DraggedItems =
-    | { type: 'tracks'; ids: Set<string> }
-    | { type: 'files'; paths: string[] }
-    | null;
-
-  const [draggedItems, setDraggedItems] = useState<DraggedItems>(null);
-  const [dragOverId, setDragOverId] = useState<string | null>(null);
-  const [insertPosition, setInsertPosition] = useState<'top' | 'bottom' | null>(null);
-
-  const handleDragStart = (e: React.DragEvent, trackId: string) => {
-    // Если перетаскиваемый трек выделен и есть другие выделенные треки,
-    // перетаскиваем все выделенные треки
-    if (selectedTrackIds.has(trackId) && selectedTrackIds.size > 1) {
-      setDraggedItems({ type: 'tracks', ids: new Set(selectedTrackIds) });
-    } else {
-      // Иначе перетаскиваем только один трек
-      setDraggedItems({ type: 'tracks', ids: new Set([trackId]) });
-    }
-
-    e.dataTransfer.effectAllowed = 'move';
-    e.dataTransfer.setData('text/plain', trackId);
-  };
-
-  const handleDragOver = (e: React.DragEvent, trackId: string) => {
-    e.preventDefault();
-    e.stopPropagation();
-
-    // Определяем тип перетаскивания
-    const types = Array.from(e.dataTransfer.types);
-    const isFiles = types.includes('application/json');
-    const isTracks = types.includes('text/plain');
-
-    if (isFiles) {
-      e.dataTransfer.dropEffect = 'copy';
-      // Устанавливаем draggedItems для файлов, если еще не установлен
-      if (!draggedItems || draggedItems.type !== 'files') {
-        setDraggedItems({ type: 'files', paths: [] });
-      }
-    } else if (isTracks) {
-      e.dataTransfer.dropEffect = 'move';
-    }
-
-    // Не показываем индикатор, если курсор над одним из перетаскиваемых треков
-    const isDraggedTrack = draggedItems?.type === 'tracks' && draggedItems.ids.has(trackId);
-    if (isDraggedTrack) {
-      return; // Ранний выход, если это перетаскиваемый трек
-    }
-
-    const rect = (e.currentTarget as HTMLElement).getBoundingClientRect();
-    const y = e.clientY - rect.top;
-    const height = rect.height;
-
-    // Определяем, в какой половине элемента находится курсор
-    const position = y < height / 2 ? 'top' : 'bottom';
-
-    setDragOverId(trackId);
-    setInsertPosition(position);
-  };
-
-  const handleDrop = (e: React.DragEvent, dropTrackId: string) => {
-    e.preventDefault();
-    e.stopPropagation();
-
-    // Определяем тип перетаскивания из dataTransfer
-    const types = Array.from(e.dataTransfer.types);
-    const isFiles = types.includes('application/json');
-
-    // Если это файлы, устанавливаем draggedItems если еще не установлен
-    if (isFiles && (!draggedItems || draggedItems.type !== 'files')) {
-      setDraggedItems({ type: 'files', paths: [] });
-    }
-
-    // Если draggedItems не установлен, выходим
-    if (!draggedItems) {
-      setDraggedItems(null);
-      setDragOverId(null);
-      setInsertPosition(null);
-      return;
-    }
-
-    // Для треков требуется insertPosition, если drop произошел на элемент
-    // Но если drop в пустое место (начало/конец), insertPosition может быть null
-    if (draggedItems.type === 'tracks' && dragOverId && !insertPosition) {
-      setDraggedItems(null);
-      setDragOverId(null);
-      setInsertPosition(null);
-      return;
-    }
-
-    const dropIndex = tracks.findIndex((track) => track.id === dropTrackId);
-    if (dropIndex === -1) {
-      setDraggedItems(null);
-      setDragOverId(null);
-      setInsertPosition(null);
-      return;
-    }
-
-    // Вычисляем финальный индекс вставки
-    let finalIndex = dropIndex;
-    if (insertPosition === 'bottom') {
-      finalIndex = dropIndex + 1;
-    } else if (!insertPosition && draggedItems.type === 'files') {
-      // Если файлы перетаскиваются на элемент без insertPosition, вставляем после
-      finalIndex = dropIndex + 1;
-    }
-
-    if (draggedItems.type === 'tracks') {
-      // Перетаскивание треков внутри плейлиста
-      const isDraggedTrack = draggedItems.ids.has(dropTrackId);
-      if (isDraggedTrack) {
-        setDraggedItems(null);
-        setDragOverId(null);
-        setInsertPosition(null);
-        return;
-      }
-
-      if (draggedItems.ids.size === 0) {
-        setDraggedItems(null);
-        setDragOverId(null);
-        setInsertPosition(null);
-        return;
-      }
-
-      // Если перетаскиваем несколько треков
-      if (draggedItems.ids.size > 1) {
-        // Проверяем, что список не пустой
-        if (tracks.length === 0) {
-          setDraggedItems(null);
-          setDragOverId(null);
-          setInsertPosition(null);
-          return;
-        }
-
-        // Подсчитываем, сколько перетаскиваемых треков находится до точки вставки
-        let selectedBeforeInsert = 0;
-        for (let i = 0; i < finalIndex && i < tracks.length; i++) {
-          if (draggedItems.ids.has(tracks[i].id)) {
-            selectedBeforeInsert++;
-          }
-        }
-
-        // Корректируем индекс: вычитаем количество перетаскиваемых треков,
-        // которые уже находятся до точки вставки
-        finalIndex -= selectedBeforeInsert;
-
-        // Ограничиваем индекс диапазоном
-        // Максимальный индекс должен учитывать, что мы вставляем группу
-        const maxIndex = Math.max(0, tracks.length - draggedItems.ids.size);
-        finalIndex = Math.max(0, Math.min(finalIndex, maxIndex));
-
-        moveSelectedTracks(finalIndex);
-      } else {
-        // Перетаскиваем один трек
-        const draggedId = Array.from(draggedItems.ids)[0];
-        const oldIndex = tracks.findIndex((track) => track.id === draggedId);
-
-        if (oldIndex === -1) {
-          setDraggedItems(null);
-          setDragOverId(null);
-          setInsertPosition(null);
-          return;
-        }
-
-        // Корректируем индекс с учетом направления перемещения
-        // Когда перемещаем элемент вниз (oldIndex < dropIndex), после удаления элемента
-        // все элементы после oldIndex сдвигаются вверх на 1 позицию
-        // Поэтому нужно скорректировать finalIndex
-
-        if (oldIndex < dropIndex) {
-          // Перемещаем вниз
-          if (insertPosition === 'bottom') {
-            finalIndex -= 1;
-          } else {
-            finalIndex -= 1;
-          }
-        }
-
-        // Ограничиваем индекс диапазоном списка
-        finalIndex = Math.max(0, Math.min(finalIndex, tracks.length - 1));
-
-        if (oldIndex !== finalIndex) {
-          moveTrack(oldIndex, finalIndex);
-        }
-      }
-    } else if (draggedItems.type === 'files') {
-      // Перетаскивание файлов из FileBrowser
-      // Получаем данные из dataTransfer
-      const data = e.dataTransfer.getData('application/json');
-      if (data) {
-        try {
-          const parsed = JSON.parse(data);
-          if (parsed.type === 'files' && Array.isArray(parsed.paths)) {
-            const newTracks = parsed.paths.map((path: string) => {
-              const fileName = path.split(/[/\\]/).pop() || 'Unknown';
-              return {
-                path,
-                name: fileName,
-                duration: undefined, // Будет загружено позже через IPC
-              };
-            });
-
-            addTracksAt(newTracks, finalIndex);
-          }
-        } catch {
-          // Ignore parse errors
-        }
-      }
-    }
-
-    setDraggedItems(null);
-    setDragOverId(null);
-    setInsertPosition(null);
-  };
-
-  const handleDragEnd = () => {
-    // Opacity восстанавливается автоматически через удаление класса .dragging
-    // Не нужно вручную изменять style.opacity
-    setDraggedItems(null);
-    setDragOverId(null);
-    setInsertPosition(null);
-  };
-
-  return (
-    <div className="playlist-view">
-      {/* Header with name input and stats */}
-      {/* Actions for selection */}
-
-      <div
-        className="playlist-tracks"
-        onDragOver={(e) => {
-          // Обрабатываем только если событие не было обработано дочерним элементом
-          const target = e.target as HTMLElement;
-          const isOverTrackItem = target.closest('.playlist-item');
-
-          if (isOverTrackItem) {
-            return;
-          }
-
-          // Проверяем типы данных в dataTransfer
-          const types = Array.from(e.dataTransfer.types);
-
-          if (types.includes('application/json')) {
-            // Файлы из FileBrowser
-            e.preventDefault();
-            e.stopPropagation();
-            e.dataTransfer.dropEffect = 'copy';
-
-            // Сбрасываем dragOverId и insertPosition, так как курсор в пустом месте
-            if (dragOverId !== null || insertPosition !== null) {
-              setDragOverId(null);
-              setInsertPosition(null);
-            }
-          } else if (types.includes('text/plain')) {
-            // Треки из плейлиста
-            e.preventDefault();
-            e.stopPropagation();
-            e.dataTransfer.dropEffect = 'move';
-
-            // Сбрасываем dragOverId и insertPosition, так как курсор в пустом месте
-            if (dragOverId !== null || insertPosition !== null) {
-              setDragOverId(null);
-              setInsertPosition(null);
-            }
-          }
-        }}
-        onDragLeave={(e) => {
-          // Проверяем, действительно ли покинули область
-          const rect = (e.currentTarget as HTMLElement).getBoundingClientRect();
-          const x = e.clientX;
-          const y = e.clientY;
-          const relatedTarget = e.relatedTarget as HTMLElement | null;
-          const currentTarget = e.currentTarget as HTMLElement;
-
-          // Проверяем, что курсор действительно покинул область контейнера
-          // и не перешел на дочерний элемент
-          if (
-            (x < rect.left || x > rect.right || y < rect.top || y > rect.bottom) &&
-            (!relatedTarget || !currentTarget.contains(relatedTarget))
-          ) {
-            setDragOverId(null);
-            setInsertPosition(null);
-          }
-        }}
-        onDrop={(e) => {
-          e.preventDefault();
-          e.stopPropagation();
-
-          // Проверяем, что drop произошел именно на контейнер, а не на элемент трека
-          const target = e.target as HTMLElement;
-          const isOverTrackItem = target.closest('.playlist-item');
-
-          if (isOverTrackItem) {
-            return;
-          }
-
-          // Проверяем тип перетаскивания напрямую из dataTransfer
-          const types = Array.from(e.dataTransfer.types);
-
-          if (types.includes('application/json') && !dragOverId) {
-            // Файлы из FileBrowser - drop в пустое место контейнера
-            const data = e.dataTransfer.getData('application/json');
-            if (data) {
-              try {
-                const parsed = JSON.parse(data);
-                if (parsed.type === 'files' && Array.isArray(parsed.paths)) {
-                  const newTracks = parsed.paths.map((path: string) => {
-                    const fileName = path.split(/[/\\]/).pop() || 'Unknown';
-                    return {
-                      path,
-                      name: fileName,
-                      duration: undefined,
-                    };
-                  });
-                  addTracks(newTracks);
-                }
-              } catch {
-                // Ignore parse errors
-              }
-            }
-            setDraggedItems(null);
-            setDragOverId(null);
-            setInsertPosition(null);
-          } else if (types.includes('text/plain') && draggedItems?.type === 'tracks' && !dragOverId) {
-            // Треки из плейлиста - drop в пустое место контейнера (конец списка)
-            if (draggedItems.ids.size > 0) {
-              if (draggedItems.ids.size > 1) {
-                moveSelectedTracks(tracks.length);
-              } else {
-                const draggedId = Array.from(draggedItems.ids)[0];
-                const oldIndex = tracks.findIndex((track) => track.id === draggedId);
-                if (oldIndex !== -1 && oldIndex !== tracks.length - 1) {
-                  moveTrack(oldIndex, tracks.length - 1);
-                }
-              }
-            }
-            setDraggedItems(null);
-            setDragOverId(null);
-            setInsertPosition(null);
-          }
-        }}
-      >
-        {tracks.length === 0 ? (
-          <div className="empty-state">
-            <p>Playlist is empty</p>
-            <p className="empty-state-hint">Add tracks to get started</p>
-            {draggedItems?.type === 'files' && (
-              <p className="empty-state-hint drag-hint">Drop files here to add them</p>
-            )}
-          </div>
-        ) : (
-          <>
-            {/* Показываем линию вставки сверху только для треков, перетаскиваемых в начало */}
-            {draggedItems?.type === 'tracks' && !dragOverId && (
-              <div className="drag-insert-line" style={{ marginBottom: '0.5rem' }} />
-            )}
-            {tracks.map((track, index) => {
-              const isDraggedTrack = draggedItems?.type === 'tracks' && draggedItems.ids.has(track.id);
-              const showInsertLine = dragOverId === track.id && insertPosition !== null;
-
-              return (
-                <React.Fragment key={track.id}>
-                  {showInsertLine && insertPosition === 'top' && (
-                    <div className="drag-insert-line" />
-                  )}
-                  <PlaylistItem
-                    track={track}
-                    index={index}
-                    isSelected={selectedTrackIds.has(track.id)}
-                    isDragging={isDraggedTrack}
-                    isDragOver={dragOverId === track.id && !isDraggedTrack}
-                    insertPosition={dragOverId === track.id && !isDraggedTrack ? insertPosition : null}
-                    onToggleSelect={toggleTrackSelection}
-                    onRemove={removeTrack}
-                    onDragStart={handleDragStart}
-                    onDragOver={(e) => handleDragOver(e, track.id)}
-                    onDrop={handleDrop}
-                    onDragEnd={handleDragEnd}
-                  />
-                  {showInsertLine && insertPosition === 'bottom' && (
-                    <div className="drag-insert-line" />
-                  )}
-                </React.Fragment>
-              );
-            })}
-            {/* Показываем линию вставки снизу только для треков, перетаскиваемых в конец */}
-            {draggedItems?.type === 'tracks' && !dragOverId && (
-              <div className="drag-insert-line" style={{ marginTop: '0.5rem' }} />
-            )}
-          </>
-        )}
-      </div>
-    </div>
-  );
-};
-```
+The component uses the `usePlaylistStore` hook to get playlist state and methods. Manages drag state through local state variables `draggedItems`, `dragOverId`, `insertPosition`. Handles drag-and-drop events through handlers `handleDragStart`, `handleDragOver`, `handleDrop`, `handleDragEnd`. Renders track list through `PlaylistItem` components with support for visual insertion indicators.
 
 ### CollectionView Component
 
-**Location**: `src/components/CollectionView.tsx`
+**Location**: `src/workspaces/collection/CollectionView.tsx`
 
 React component for rendering a collection workspace. Collections are lightweight versions of playlists designed for temporary storage of tracks. They reuse the same UI and logic as playlists but are stored separately.
 
@@ -1411,82 +627,54 @@ React component for rendering a collection workspace. Collections are lightweigh
 
 **Props:**
 
-```typescript
-interface CollectionViewProps {
-  workspaceId: WorkspaceId; // Unique identifier for the collection
-  zoneId?: string; // Associated layout zone ID
-}
-```
+The component accepts `workspaceId` (unique collection identifier) and optional `zoneId` (layout zone ID).
 
 **Store Creation:**
 
-Collections use `ensureTrackWorkspaceStore()` to create or retrieve their store:
-
-```typescript
-const collectionStore = ensureTrackWorkspaceStore({
-  workspaceId,
-  initialName: 'New Collection',
-  maxTracks: null, // Unlimited
-  historyDepth: 50,
-});
-```
+Collections use `ensureTrackWorkspaceStore()` to create or retrieve a store with options: workspaceId, initialName, maxTracks (null for unlimited), historyDepth.
 
 **Drag-and-Drop:**
 
-Collections use `useTrackWorkspaceDragAndDrop` hook, which:
-
-- Handles internal track reordering
-- Supports cross-workspace operations via `dragDropStore`
-- Detects Ctrl/Cmd key for copy operations
-- Uses global `draggedItems` state from `uiStore`
-
-**Example Usage:**
-
-```typescript
-<CollectionView
-  workspaceId="collection-123"
-  zoneId="zone-456"
-/>
-```
+Collections use the `useTrackWorkspaceDragAndDrop` hook, which handles internal track reordering, supports cross-workspace operations via `dragDropStore`, detects Ctrl/Cmd key for copy operations and uses global `draggedItems` state from `uiStore`.
 
 ---
 
 ### PlaylistItem Component
 
-**Location**: `src/components/PlaylistItem.tsx`
+**Location**: `src/shared/components/PlaylistItem.tsx`
 
-Компонент для отображения отдельного трека в плейлисте. Поддерживает drag-and-drop через нативный HTML5 API.
+Component for displaying a single track in a playlist. Supports drag-and-drop through native HTML5 API.
 
 **Props:**
 
-- `track: Track` - объект трека
-- `index: number` - индекс в списке
-- `isSelected: boolean` - выделен ли трек
-- `isDragging: boolean` - перетаскивается ли трек
-- `isDragOver?: boolean` - находится ли курсор над треком
-- `insertPosition?: 'top' | 'bottom' | null` - позиция вставки для визуального индикатора
-- `onToggleSelect: (id: string) => void` - обработчик выделения
-- `onRemove: (id: string) => void` - обработчик удаления
-- `onDragStart: (e: React.DragEvent, id: string) => void` - начало перетаскивания
-- `onDragOver: (e: React.DragEvent) => void` - курсор над элементом
-- `onDrop: (e: React.DragEvent, id: string) => void` - отпускание элемента
-- `onDragEnd: (e: React.DragEvent) => void` - окончание перетаскивания
+- `track: Track` - track object
+- `index: number` - index in the list
+- `isSelected: boolean` - whether the track is selected
+- `isDragging: boolean` - whether the track is being dragged
+- `isDragOver?: boolean` - whether cursor is over the track
+- `insertPosition?: 'top' | 'bottom' | null` - insertion position for visual indicator
+- `onToggleSelect: (id: string) => void` - selection handler
+- `onRemove: (id: string) => void` - removal handler
+- `onDragStart: (e: React.DragEvent, id: string) => void` - drag start
+- `onDragOver: (e: React.DragEvent) => void` - cursor over element
+- `onDrop: (e: React.DragEvent, id: string) => void` - element drop
+- `onDragEnd: (e: React.DragEvent) => void` - drag end
 
 **Drag-and-Drop Implementation:**
 
-Элемент использует атрибут `draggable` и обработчики событий HTML5:
+The element uses the `draggable` attribute and HTML5 event handlers:
 
-- `draggable={true}` - делает элемент перетаскиваемым
-- `onDragStart` - инициирует перетаскивание
-- `onDragOver` - обрабатывает наведение курсора
-- `onDrop` - обрабатывает отпускание
-- `onDragEnd` - завершает перетаскивание
+- `draggable={true}` - makes the element draggable
+- `onDragStart` - initiates dragging
+- `onDragOver` - handles cursor hover
+- `onDrop` - handles drop
+- `onDragEnd` - completes dragging
 
 **Visual States:**
 
-- `.dragging` - перетаскиваемый элемент (opacity: 0.5)
-- `.selected` - выделенный элемент (синий фон и рамка)
-- `.drag-over` - элемент над которым курсор (без визуального выделения, используется только линия)
+- `.dragging` - dragged element (opacity: 0.5)
+- `.selected` - selected element (blue background and border)
+- `.drag-over` - element over which cursor is located (no visual highlighting, only line is used)
 
 **Track Item Sizing:**
 
@@ -1503,51 +691,19 @@ PlaylistView supports visual dividers showing accumulated time intervals:
 - Controlled by `showHourDividers` and `hourDividerInterval` settings
 - Dividers use `.playlist-hour-divider` and `.playlist-hour-divider-label` CSS classes
 
-**Example Code:**
-
-```typescript
-// src/components/PlaylistItem.tsx
-export const PlaylistItem: React.FC<PlaylistItemProps> = ({
-  track,
-  index,
-  isSelected,
-  isDragging,
-  isDragOver = false,
-  insertPosition = null,
-  onToggleSelect,
-  onRemove,
-  onDragStart,
-  onDragOver,
-  onDrop,
-  onDragEnd,
-}) => {
-  return (
-    <div
-      draggable
-      onDragStart={(e) => onDragStart(e, track.id)}
-      onDragOver={onDragOver}
-      onDrop={(e) => onDrop(e, track.id)}
-      onDragEnd={onDragEnd}
-      className={`playlist-item ${isSelected ? 'selected' : ''} ${isDragging ? 'dragging' : ''} ${isDragOver ? 'drag-over' : ''}`}
-      onClick={() => onToggleSelect(track.id)}
-    >
-      {/* Drag handle, index, name, duration, delete button */}
-    </div>
-  );
-};
-```
+The component accepts props: track, index, isSelected, isDragging, isDragOver, insertPosition, and event handlers (onToggleSelect, onRemove, onDragStart, onDragOver, onDrop, onDragEnd). Uses the `draggable` attribute and HTML5 Drag and Drop API handlers. Applies CSS classes for visual states: selected, dragging, drag-over.
 
 ---
 
 ### SettingsModal Component
 
-**Location**: `src/components/SettingsModal.tsx`
+**Location**: `src/app/components/SettingsModal.tsx`
 
-Модальное окно для настройки UI приложения. Открывается через `uiStore.openModal('settings')`.
+Modal window for configuring application UI. Opened via `uiStore.openModal('settings')`.
 
 **Features:**
 
-- **Track Item Size Preset**: Select between "Маленькие", "Средние", "Большие"
+- **Track Item Size Preset**: Select between "Small", "Medium", "Large"
   - Small: padding 8px, margin 2px
   - Medium: padding 12px, margin 4px (default)
   - Large: padding 16px, margin 6px
@@ -1559,8 +715,8 @@ export const PlaylistItem: React.FC<PlaylistItemProps> = ({
 
 - Uses local state for form inputs (`localTrackItemSizePreset`, `localHourDividerInterval`, `localShowHourDividers`)
 - Syncs with `settingsStore` on modal open
-- Saves to `settingsStore` on "Сохранить" button click
-- Cancels changes on "Отмена" button click
+- Saves to `settingsStore` on "Save" button click
+- Cancels changes on "Cancel" button click
 
 **Note**: Export settings have been moved to `ExportModal` component.
 
@@ -1568,26 +724,26 @@ export const PlaylistItem: React.FC<PlaylistItemProps> = ({
 
 ### ExportModal Component
 
-**Location**: `src/components/ExportModal.tsx`
+**Location**: `src/app/components/ExportModal.tsx`
 
-Модальное окно для настройки и выполнения экспорта плейлиста. Открывается через `uiStore.openModal('export')`.
+Modal window for configuring and executing playlist export. Opened via `uiStore.openModal('export')`.
 
 **Features:**
 
 - **Export Folder**: Input field with browse button for selecting target folder
-- **Export Strategy**: Select between "Копирование с нумерацией" and "AIMP плейлист"
+- **Export Strategy**: Select between "Copy with numbering" and "AIMP playlist"
 
 **Workflow:**
 
 1. User clicks export button in `AppHeader`
 2. `ExportModal` opens with current export settings
 3. User selects folder and strategy
-4. On "Экспортировать":
+4. On "Export":
    - Saves settings to `settingsStore`
    - Executes export via `exportService`
    - Shows success/error notification
    - Closes modal
-5. On "Отмена": Closes modal without saving or exporting
+5. On "Cancel": Closes modal without saving or exporting
 
 **Integration:**
 
@@ -1600,44 +756,17 @@ export const PlaylistItem: React.FC<PlaylistItemProps> = ({
 
 ### useTrackItemSize Hook
 
-**Location**: `src/hooks/useTrackItemSize.ts`
+**Location**: `src/shared/hooks/useTrackItemSize.ts`
 
 React hook that initializes and updates CSS variables for track item sizes based on the selected preset from settings.
 
 **Implementation:**
 
-```typescript
-import { useEffect } from 'react';
-import { useSettingsStore, TrackItemSizePreset } from '../state/settingsStore';
-
-const SIZE_PRESETS: Record<TrackItemSizePreset, { padding: number; margin: number }> = {
-  small: { padding: 8, margin: 2 },
-  medium: { padding: 12, margin: 4 },
-  large: { padding: 16, margin: 6 },
-};
-
-export const useTrackItemSize = () => {
-  const trackItemSizePreset = useSettingsStore((state) => state.trackItemSizePreset);
-
-  useEffect(() => {
-    const { padding, margin } = SIZE_PRESETS[trackItemSizePreset];
-    document.documentElement.style.setProperty('--track-item-padding', `${padding}px`);
-    document.documentElement.style.setProperty('--track-item-margin', `${margin}px`);
-  }, [trackItemSizePreset]);
-};
-```
+The hook uses `useSettingsStore` to get `trackItemSizePreset`. Defines size presets: small (padding 8px, margin 2px), medium (padding 12px, margin 4px), large (padding 16px, margin 6px). In `useEffect`, sets CSS variables `--track-item-padding` and `--track-item-margin` on the document root element depending on the selected preset.
 
 **Usage:**
 
-```typescript
-// In App.tsx
-import { useTrackItemSize } from './hooks/useTrackItemSize';
-
-const App: React.FC = () => {
-  useTrackItemSize();
-  // ... rest of component
-};
-```
+The hook is called once at the application root level (in App.tsx) to initialize CSS variables.
 
 **Behavior:**
 
@@ -1658,22 +787,29 @@ These variables are used by:
 
 ## 7.1 Track Object
 
-    Track {
-      id: string
-      path: string
-      name: string
-      duration?: number  // Duration in seconds (optional, extracted using music-metadata)
-    }
+Track object contains: `id` (unique identifier), `path` (file path), `name` (track name), `duration` (optional duration in seconds, extracted via music-metadata).
 
 ## 7.2 Playlist File (JSON)
 
-    {
-      "name": "Techno Party",
-      "tracks": [
-        { "path": "D:/Music/track1.mp3" },
-        { "path": "D:/Music/track2.wav" }
-      ]
-    }
+Playlist JSON file contains an object with fields: `name` (playlist name) and `tracks` (array of track objects).
+
+Each track object in the `tracks` array can contain:
+- `path: string` - **Required**. File path to the track
+- `name?: string` - **Optional**. Track name (if not provided, extracted from path)
+- `duration?: number` - **Optional**. Track duration in seconds
+
+Example:
+```json
+{
+  "name": "My Playlist",
+  "tracks": [
+    { "path": "C:/Music/track1.mp3", "name": "Track 1", "duration": 180 },
+    { "path": "C:/Music/track2.mp3" }
+  ]
+}
+```
+
+When loading a playlist via `loadFromJSON()`, tracks without `name` will have it extracted from the path, and tracks without `duration` will have it loaded asynchronously via IPC.
 
 ## 7.3 AIMP Playlist Format (M3U8)
 
@@ -1700,13 +836,7 @@ If playlist is exported to: `D:/Exports/MyPlaylist/`
 
 - Tracks are copied to: `D:/Exports/MyPlaylist/track1.mp3`, `track2.mp3`, etc.
 - Playlist file: `D:/Exports/MyPlaylist/MyPlaylist.m3u8`
-- Playlist content:
-  ```
-  #EXTM3U
-  track1.mp3
-  track2.mp3
-  track3.mp3
-  ```
+- Playlist content: Header `#EXTM3U`, then list of relative paths to tracks (e.g., `track1.mp3`, `track2.mp3`, `track3.mp3`)
 
 This structure allows moving the entire `MyPlaylist` folder to another location (including mobile devices) without breaking playlist paths.
 
@@ -1726,28 +856,11 @@ panels - Automated tools (future)
 
 ## Manifest Example
 
-    {
-      "name": "Beatport History Importer",
-      "version": "0.1",
-      "entry": "index.js",
-      "type": "source"
-    }
+Manifest file contains a JSON object with fields: `name` (plugin name), `version` (version), `entry` (entry point, e.g., index.js), `type` (plugin type, e.g., "source").
 
 ## Plugin API Structure
 
-    module.exports = {
-      init(api) { ... },
-      destroy() { ... }
-    }
-
-Where `api` includes:
-
-    {
-      registerTrackSource(source),
-      registerExportStrategy(strategy),
-      getSettings(),
-      log()
-    }
+Plugin exports an object with methods `init(api)` and `destroy()`. API includes methods: `registerTrackSource(source)`, `registerExportStrategy(strategy)`, `getSettings()`, `log()`.
 
 ---
 
@@ -1767,52 +880,7 @@ The application uses a **dark theme** by default with a modular theme system tha
 
 ### 9.1.2 Color Palette (Dark Theme)
 
-All colors are defined in a centralized theme configuration for easy modification:
-
-```typescript
-interface ThemeColors {
-  // Background colors
-  background: {
-    primary: string; // Main app background
-    secondary: string; // Panel backgrounds
-    tertiary: string; // Item backgrounds
-    hover: string; // Hover state background
-  };
-
-  // Text colors
-  text: {
-    primary: string; // Main text color
-    secondary: string; // Secondary text (metadata, paths)
-    disabled: string; // Disabled text
-  };
-
-  // Accent colors
-  accent: {
-    primary: string; // Primary actions (buttons, links)
-    secondary: string; // Secondary actions
-    border: string; // Borders and dividers
-  };
-
-  // State colors
-  state: {
-    selected: {
-      background: string; // Selected item background (#3a4a5a)
-      border: string; // Selected item border (#6495ed)
-    };
-    success: string; // Success messages
-    error: string; // Error messages
-    warning: string; // Warning messages
-    info: string; // Info messages
-  };
-
-  // UI element colors
-  ui: {
-    divider: string; // Panel divider
-    dragHandle: string; // Drag handle icon
-    deleteButton: string; // Delete button icon
-  };
-}
-```
+All colors are defined in a centralized theme configuration for easy modification. Structure includes: background (primary, secondary, tertiary, hover), text (primary, secondary, disabled), accent (primary, secondary, border), state (selected with background and border, success, error, warning, info), ui (divider, dragHandle, deleteButton).
 
 **Recommended Dark Theme Colors (Best Practices):**
 
@@ -1896,23 +964,7 @@ interface ThemeColors {
 
 ### 9.2.2 Main Layout Structure
 
-```
-┌─────────────────────────────────────────────────────────────┐
-│ HEADER (Fixed)                                              │
-│ [New] [Save] [Load] | [Export] | [Undo] [Redo] | [Settings]│
-│ Playlist Name                                               │
-│ 📊 15 треков • ⏱️ 2:34:15                                   │
-├──────────────────────────┬──────────────────────────────────┤
-│                          │                                  │
-│   PLAYLIST PANEL         │     SOURCES PANEL                │
-│   (Resizable)            │     (Resizable)                  │
-│                          │                                  │
-│   - Track list           │     - File browser              │
-│   - Drag & drop          │     - Navigation tools           │
-│   - Selection            │     - Search                    │
-│                          │                                  │
-└──────────────────────────┴──────────────────────────────────┘
-```
+Main layout structure: fixed HEADER at the top with action buttons (New, Save, Load, Export, Undo, Redo, Settings), playlist name and statistics. Below is a split into two panels: PLAYLIST PANEL (track list, drag & drop, selection) and SOURCES PANEL (file browser, navigation, search). Both panels are resizable.
 
 ### 9.2.3 Panel Resizing
 
@@ -1938,34 +990,7 @@ The application uses a universal recursive split container system for flexible w
 
 **Data Structure:**
 
-```typescript
-type ZoneType = 'container' | 'workspace';
-
-type SplitDirection = 'horizontal' | 'vertical';
-
-interface WorkspaceZone {
-  id: string; // UUID
-  type: 'workspace';
-  workspaceId: WorkspaceId;
-  workspaceType: string; // 'playlist', 'fileBrowser', etc.
-  size: number; // percentage (0-100)
-}
-
-interface ContainerZone {
-  id: string; // UUID
-  type: 'container';
-  direction: SplitDirection;
-  zones: Zone[]; // recursive structure
-  sizes: number[]; // percentages for each zone (sum = 100)
-}
-
-type Zone = WorkspaceZone | ContainerZone;
-
-interface Layout {
-  rootZone: Zone;
-  version: number; // for future migrations
-}
-```
+Layout is represented as a recursive tree structure. Types: `ZoneType` ('container' | 'workspace'), `SplitDirection` ('horizontal' | 'vertical'). `WorkspaceZone` contains id (UUID), type ('workspace'), workspaceId, workspaceType, size (percentage 0-100). `ContainerZone` contains id (UUID), type ('container'), direction, zones (recursive structure), sizes (percentages for each zone, sum = 100). `Zone` is either WorkspaceZone or ContainerZone. `Layout` contains rootZone and version (for future migrations).
 
 #### 9.2.4.2 Functional Requirements
 
@@ -2165,7 +1190,7 @@ Available presets:
 
 - **Playlist name:** Editable text field or display
 - **Technical information:** Single line with icons
-  - Format: `📊 [count] треков • ⏱️ [duration]`
+  - Format: `📊 [count] tracks • ⏱️ [duration]`
   - Icons: Material Icons (list icon for count, timer/clock icon for duration)
   - Font size: `12px` (secondary text)
   - Color: Text secondary
@@ -2190,16 +1215,7 @@ Available presets:
 
 **Layout Structure:**
 
-```
-[▶] [☰] [01] [Track Name]                    [3:45] [×]
-│    │    │    │                                │      │
-│    │    │    │                                │      └─ Delete button (always visible)
-│    │    │    │                                └─ Duration (M:SS format)
-│    │    │    └─ Track name (filename)
-│    │    └─ Track number (large, left-aligned)
-│    └─ Drag handle (three horizontal lines, always visible)
-└─ Play button (Material Icon `play_arrow` / `pause`)
-```
+Track element contains from left to right: play button (Play/Pause), drag handle (three horizontal lines), track number (large, left-aligned), track name (main content centered), duration (M:SS format, right), delete button (always visible, right).
 
 **Item Specifications:**
 
@@ -2296,16 +1312,14 @@ Available presets:
   - Click action: Navigate to clicked segment
 - **Search field:**
   - Position: Right side of toolbar
-  - Placeholder: "Поиск..."
+  - Placeholder: "Search..."
   - Behavior: Real-time recursive search (searches all subdirectories)
   - Search scope: File and folder names
   - Results display: See section 9.5.3
 
 **Layout:**
 
-```
-[←] [↑] [Home > Music > Playlists]                    [🔍 Поиск...]
-```
+Navigation panel contains from left to right: "Back" button (←), "Up" button (↑), breadcrumbs (Home > Music > Playlists), search field on the right (🔍 Search...).
 
 ### 9.5.2 File List
 
@@ -2353,7 +1367,7 @@ Available presets:
 ### 9.5.4 Empty State
 
 - **Scenario:** Should not occur (always show at least root directory)
-- **If empty:** Show message "Папка пуста" or similar
+- **If empty:** Show message "Folder is empty" or similar
 
 ## 9.7 Modal Windows
 
@@ -2527,7 +1541,7 @@ Available presets:
 
 - **Button labels:** Icons with tooltips (no text labels)
 - **Tooltips:** Full descriptions in Russian
-- **Placeholders:** Russian (e.g., "Поиск...")
+- **Placeholders:** English (e.g., "Search...")
 - **Empty states:** Russian messages
 
 ---
@@ -2565,14 +1579,14 @@ Available presets:
 
 - **Location:** Always visible in the top-most row of `AppHeader`.
 - **Layout:**
-  - Left block: Play/Pause button, track title (ellipsis if long), “Показать в браузере” button.
+  - Left block: Play/Pause button, track title (ellipsis if long), "Show in browser" button.
   - Middle block: timeline slider with current time on the left and total duration on the right.
   - Right block: volume slider (0–100%).
 - **Behavior:**
   - Play/Pause toggles based on `demoPlayerStore.status`.
   - Timeline click/drag invokes `seek`.
   - If playback errors occur, the control surface disables and shows notification.
-  - When no track selected, controls are disabled and placeholder “Нет активного трека” is shown.
+  - When no track selected, controls are disabled and placeholder "No active track" is shown.
 
 ## 10.2 Export Features
 
@@ -2605,7 +1619,6 @@ Available presets:
 
 ## Performance
 
-- Max playlist size: 150 tracks.
 - UI reactivity \< 16ms frame time.
 - Export speed: limited by disk I/O.
 
@@ -2626,56 +1639,22 @@ Available presets:
 
 ## Memoization
 
-Heavy computations should be memoized to avoid unnecessary recalculations:
-
-```typescript
-// Example: Memoize total duration calculation
-const totalDuration = useMemo(
-  () => tracks.reduce((sum, track) => sum + (track.duration || 0), 0),
-  [tracks],
-);
-```
+Heavy computations should be memoized to avoid unnecessary recalculations. For example, total playlist duration calculation should use `useMemo` with dependency on the tracks array.
 
 ## Debouncing
 
-User input operations (like search) should be debounced to reduce unnecessary operations:
-
-```typescript
-// Example: Debounce search input
-const debouncedSearch = useMemo(
-  () =>
-    debounce((query: string) => {
-      performSearch(query);
-    }, 300),
-  [],
-);
-```
+User input operations (e.g., search) should be debounced to reduce unnecessary operations. `useMemo` with `debounce` function is used to delay search execution.
 
 ## Event Handler Stability
 
-Event handlers in `useEffect` dependencies should be stable to avoid unnecessary re-registrations:
-
-```typescript
-// Use useCallback for stable function references
-const handleKeyDown = useCallback(
-  (e: KeyboardEvent) => {
-    // handler logic
-  },
-  [dependencies],
-);
-
-useEffect(() => {
-  window.addEventListener('keydown', handleKeyDown);
-  return () => window.removeEventListener('keydown', handleKeyDown);
-}, [handleKeyDown]);
-```
+Event handlers in `useEffect` dependencies should be stable to avoid unnecessary re-registrations. `useCallback` is used to create stable function references, which are then used in `useEffect` for registering/unregistering event handlers.
 
 ## List Rendering Optimization
 
 For large lists, consider virtualization or pagination:
 
-- Current implementation handles up to 150 tracks (MAX_PLAYLIST_SIZE)
-- For future expansion, consider implementing virtual scrolling
+- Playlists and collections support unlimited tracks
+- For very large lists, consider implementing virtual scrolling
 
 ## Async Operations
 
@@ -2712,22 +1691,7 @@ Path validation is implemented in `electron/utils/fsHelpers.ts` via the `validat
 
 **Critical Requirement**: When `basePath` is not provided, paths containing `..` should be blocked to prevent path traversal attacks. The current implementation allows `..` in paths when `basePath` is not specified, which could be a security vulnerability.
 
-**Required Fix**: The `validatePath()` function should block paths with `..` when `basePath` is not provided:
-
-```typescript
-export function validatePath(userPath: string, basePath?: string): boolean {
-  if (!userPath || typeof userPath !== 'string') {
-    return false;
-  }
-
-  // Block paths with .. if basePath is not specified
-  if (!basePath && (userPath.includes('..') || userPath.includes('~'))) {
-    return false;
-  }
-
-  // ... rest of validation
-}
-```
+**Required Fix**: The `validatePath()` function should block paths with `..` when `basePath` is not provided. The check should be performed at the beginning of the function: if `basePath` is not specified and the path contains `..` or `~`, the function should return false.
 
 ### File Existence Validation
 
@@ -2741,16 +1705,8 @@ All IPC channels are whitelisted in `electron/preload.ts`. Only channels in the 
 
 ## 12.4 Content Security Policy
 
-Content Security Policy (CSP) is configured in `index.html`:
+Content Security Policy (CSP) is configured in `index.html` via meta tag with http-equiv="Content-Security-Policy". The policy restricts:
 
-```html
-<meta
-  http-equiv="Content-Security-Policy"
-  content="default-src 'self'; script-src 'self' 'unsafe-inline' https://fonts.googleapis.com; style-src 'self' 'unsafe-inline' https://fonts.googleapis.com; font-src 'self' https://fonts.gstatic.com;"
-/>
-```
-
-This restricts:
 
 - Scripts to same origin and inline scripts (required for Vite)
 - Styles to same origin, inline styles, and Google Fonts
@@ -2769,33 +1725,7 @@ This restricts:
 
 ## 13.1 Error Handling Strategy
 
-All IPC calls and file operations should implement proper error handling:
-
-```typescript
-// Example: Error handling in export service
-async function exportPlaylist(tracks: Track[], options: ExportOptions) {
-  const errors: ExportError[] = [];
-  const successful: string[] = [];
-
-  for (const track of tracks) {
-    try {
-      await ipcService.copyFile(track.path, targetPath);
-      successful.push(track.path);
-    } catch (error) {
-      errors.push({
-        track: track.path,
-        error: error instanceof Error ? error.message : 'Unknown error',
-      });
-    }
-  }
-
-  return {
-    success: errors.length === 0,
-    successful,
-    errors,
-  };
-}
-```
+All IPC calls and file operations should implement proper error handling. For example, playlist export function should process each track in a loop with try-catch, collect errors and successful operations in separate arrays, return an object with fields success, successful, errors.
 
 ## 13.2 Common Error Types
 
@@ -2807,77 +1737,29 @@ async function exportPlaylist(tracks: Track[], options: ExportOptions) {
 
 ## 13.3 User-Facing Error Messages
 
-Errors should be displayed to users via notifications:
-
-```typescript
-try {
-  await exportPlaylist(tracks, options);
-  useUIStore.getState().addNotification('Export completed successfully', 'success');
-} catch (error) {
-  useUIStore.getState().addNotification(`Export failed: ${error.message}`, 'error');
-}
-```
+Errors should be displayed to users via notifications. A try-catch block is used: on success, a 'success' notification is shown, on error - an 'error' notification with error message via `useUIStore.getState().addNotification()`.
 
 ## 13.4 Error Handling Best Practices
 
 ### Standardized Error Response Format
 
-All IPC handlers should return a standardized response format:
-
-```typescript
-interface IPCResponse<T> {
-  success: boolean;
-  data?: T;
-  error?: string;
-}
-```
+All IPC handlers should return a standardized response format: an object with fields `success` (boolean), `data` (optional data), `error` (optional error message).
 
 ### Error Type Enumeration
 
-Consider creating an enum for error types to standardize error messages:
-
-```typescript
-enum ErrorType {
-  FILE_NOT_FOUND = 'FILE_NOT_FOUND',
-  PERMISSION_DENIED = 'PERMISSION_DENIED',
-  DISK_FULL = 'DISK_FULL',
-  INVALID_PATH = 'INVALID_PATH',
-  IPC_ERROR = 'IPC_ERROR',
-}
-```
+It is recommended to create an enum for error types to standardize error messages: FILE_NOT_FOUND, PERMISSION_DENIED, DISK_FULL, INVALID_PATH, IPC_ERROR.
 
 ### Error Logging
 
-Errors should be logged for debugging purposes, especially in development mode:
-
-```typescript
-if (process.env.NODE_ENV === 'development') {
-  console.error('Path validation error:', error);
-}
-```
+Errors should be logged for debugging, especially in development mode. The check `process.env.NODE_ENV === 'development'` should be used for conditional logging.
 
 ### Graceful Degradation
 
-Operations should fail gracefully, allowing partial success when possible:
-
-```typescript
-// Example: Export continues even if some files fail
-const result = await exportPlaylist(tracks, options);
-if (result.failed.length > 0) {
-  // Show notification about failed files
-  // But don't fail the entire operation
-}
-```
+Operations should fail gracefully, allowing partial success when possible. For example, export should continue even if some files failed to copy, showing a notification about failed files, but not interrupting the entire operation.
 
 ### Validation Before Operations
 
-Always validate inputs and check prerequisites before performing operations:
-
-```typescript
-// Check file existence before copying
-await fs.access(sourcePath);
-await copyFile(sourcePath, destPath);
-```
+Always validate input data and check prerequisites before performing operations. For example, check file existence via `fs.access()` before copying.
 
 ---
 
@@ -2885,75 +1767,48 @@ await copyFile(sourcePath, destPath);
 
 ## Current Implementation
 
-Currently, the application uses `console.error()` directly in several places (6 instances found). This is acceptable for development but should be improved for production.
+**Location**: `src/shared/utils/logger.ts`
 
-## Recommended Approach
+A centralized logging system is **already implemented** in the application. The `Logger` class provides structured logging with environment awareness.
 
-### Centralized Logging Service
+### Logger Class
 
-A centralized logging service should be implemented with the following features:
+The `Logger` class implements the following methods:
 
-- **Log Levels**: `debug`, `info`, `warn`, `error`
-- **Environment Awareness**: Different behavior in development vs production
-- **Structured Logging**: Consistent log format with context information
+- `debug(message: string, ...args: unknown[]): void` - Debug messages (development only)
+- `info(message: string, ...args: unknown[]): void` - Informational messages (development only)
+- `warn(message: string, ...args: unknown[]): void` - Warning messages (always logged)
+- `error(message: string, error?: Error | unknown, ...args: unknown[]): void` - Error messages (always logged)
 
-### Example Implementation
+### Environment Awareness
 
-```typescript
-// src/utils/logger.ts
-enum LogLevel {
-  DEBUG = 'debug',
-  INFO = 'info',
-  WARN = 'warn',
-  ERROR = 'error',
-}
-
-class Logger {
-  private isDev = process.env.NODE_ENV === 'development';
-
-  debug(message: string, ...args: any[]): void {
-    if (this.isDev) {
-      console.debug(`[DEBUG] ${message}`, ...args);
-    }
-  }
-
-  info(message: string, ...args: any[]): void {
-    if (this.isDev) {
-      console.info(`[INFO] ${message}`, ...args);
-    }
-  }
-
-  warn(message: string, ...args: any[]): void {
-    console.warn(`[WARN] ${message}`, ...args);
-  }
-
-  error(message: string, error?: Error, ...args: any[]): void {
-    console.error(`[ERROR] ${message}`, error, ...args);
-    // In production, could send to error tracking service
-  }
-}
-
-export const logger = new Logger();
-```
+- **Development** (`NODE_ENV === 'development'`): All log levels (`debug`, `info`, `warn`, `error`) are visible in console
+- **Production**: Only `warn` and `error` are logged to console
 
 ### Usage
 
+The logger is exported as a singleton instance:
+
 ```typescript
-import { logger } from './utils/logger';
+import { logger } from '@shared/utils/logger';
 
-// Instead of console.error
-logger.error('Failed to load directory', error);
-
-// With context
-logger.debug('Path validation', { path, basePath, result });
+logger.debug('Debug information', { context: 'some data' });
+logger.info('Informational message');
+logger.warn('Warning message');
+logger.error('Error message', error);
 ```
 
-### Logging Requirements
+### Implementation Details
 
-- **Development**: All log levels should be visible in console
-- **Production**: Only `warn` and `error` should be logged
-- **Error Tracking**: Consider integrating with error tracking service (e.g., Sentry) for production
-- **Log Rotation**: For file-based logging, implement log rotation to prevent disk space issues
+- Logs are prefixed with log level: `[DEBUG]`, `[INFO]`, `[WARN]`, `[ERROR]`
+- Error objects are properly handled and logged with stack traces
+- In production, error tracking service integration (e.g., Sentry) can be added to the `error()` method
+
+### Future Enhancements
+
+- File-based logging with log rotation
+- Integration with error tracking services (e.g., Sentry) for production
+- Structured logging format (JSON) for better parsing
 
 ---
 
@@ -2970,13 +1825,12 @@ See `CHANGELOG.md` for a complete list of known issues identified during code re
 
 ### Medium Priority Issues
 
-3. **Missing Playlist Size Limit Enforcement**: MAX_PLAYLIST_SIZE = 150 is documented but not enforced in code
-4. **Potential Memory Leak**: Keyboard event handler dependencies could cause unnecessary re-registrations
+3. **Potential Memory Leak**: Keyboard event handler dependencies could cause unnecessary re-registrations
 5. **Race Condition**: Track duration loading might update deleted tracks
 
 ### Low Priority Issues
 
-6. **Console.error Usage**: Direct `console.error` usage instead of centralized logging
+6. **Console.error Usage**: Some direct `console.error` usage may still exist in legacy code (should be migrated to `logger.error()`)
 7. **Incomplete Error Information**: Error information lost in `validatePath` catch block
 
 ## Future Improvements
@@ -2990,7 +1844,7 @@ See `CHANGELOG.md` for a complete list of known issues identified during code re
 ### Code Quality
 
 - Extract constants to dedicated constants file (`src/constants/index.ts`)
-- Implement centralized logging system with log levels
+- Migrate remaining direct `console.error` usage to `logger.error()`
 - Improve error handling with standardized error types
 - Add comprehensive test coverage for critical functions
 
@@ -3019,42 +1873,11 @@ See `CHANGELOG.md` for a complete list of known issues identified during code re
 
 ## 14.2 IPC Call Pattern
 
-```typescript
-// Standard pattern for IPC calls
-async function safeIPCCall<T>(channel: string, payload: any, errorMessage: string): Promise<T> {
-  try {
-    return await ipcService.invoke<T>(channel, payload);
-  } catch (error) {
-    console.error(errorMessage, error);
-    useUIStore.getState().addNotification(errorMessage, 'error');
-    throw error;
-  }
-}
-```
+Standard pattern for IPC calls: wrapper function with try-catch block that calls `ipcService.invoke()`, logs errors via `console.error`, shows error notification via `useUIStore.getState().addNotification()`, and re-throws the error.
 
 ## 14.3 Store Update Pattern
 
-```typescript
-// Pattern for updating stores with validation
-function addTrackWithValidation(track: Omit<Track, 'id'>) {
-  // Validate track
-  if (!track.path || !track.name) {
-    throw new Error('Invalid track data');
-  }
-
-  // Check if already exists
-  const existing = usePlaylistStore.getState().tracks.find((t) => t.path === track.path);
-
-  if (existing) {
-    useUIStore.getState().addNotification('Track already in playlist', 'info');
-    return;
-  }
-
-  // Add track
-  usePlaylistStore.getState().addTrack(track);
-  useUIStore.getState().addNotification('Track added', 'success');
-}
-```
+Pattern for updating stores with validation: function validates input data (checks required fields), checks element existence (e.g., track already in playlist), shows info notification if element already exists, adds element to store and shows success notification.
 
 ---
 
@@ -3062,39 +1885,11 @@ function addTrackWithValidation(track: Omit<Track, 'id'>) {
 
 ## 15.1 Setup Commands
 
-```bash
-# Install dependencies
-npm install
-
-# Development mode
-npm run dev
-
-# Build for production
-npm run build
-
-# Package application
-npm run package
-```
+Main commands: `npm install` for installing dependencies, `npm run dev` for development mode, `npm run build` for building production version, `npm run package` for packaging the application.
 
 ## 15.2 Project Structure
 
-```
-CherryPlayList/
-├── electron/
-│   ├── main.ts
-│   ├── preload.ts
-│   ├── ipc/
-│   └── utils/
-├── src/
-│   ├── components/
-│   ├── state/
-│   ├── services/
-│   ├── types/
-│   ├── hooks/
-│   └── index.tsx
-├── public/
-└── package.json
-```
+Project structure: root folder CherryPlayList contains electron/ (main.ts, preload.ts, ipc/, utils/), src/ (components/, state/, services/, types/, hooks/, index.tsx), public/, package.json.
 
 ## 15.3 TypeScript Configuration
 
@@ -3154,28 +1949,7 @@ Component tests should cover:
 
 ### Test Structure
 
-```typescript
-describe('FunctionName', () => {
-  it('should handle normal case', () => {
-    // Arrange
-    const input = 'test';
-
-    // Act
-    const result = functionName(input);
-
-    // Assert
-    expect(result).toBe('expected');
-  });
-
-  it('should handle edge case', () => {
-    // Test edge cases
-  });
-
-  it('should handle error case', () => {
-    // Test error handling
-  });
-});
-```
+Tests are structured according to Arrange-Act-Assert pattern: describe block for grouping function tests, separate it blocks for normal case, edge cases and error cases. Each test contains Arrange (data preparation), Act (function execution), Assert (result verification).
 
 ### Mocking
 

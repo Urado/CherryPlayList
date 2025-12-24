@@ -23,7 +23,11 @@
     /* Path aliases */
     "baseUrl": ".",
     "paths": {
-      "@/*": ["src/*"]
+      "@/*": ["src/*"],
+      "@core/*": ["src/core/*"],
+      "@shared/*": ["src/shared/*"],
+      "@workspaces/*": ["src/workspaces/*"],
+      "@app/*": ["src/app/*"]
     }
   },
   "include": ["src"],

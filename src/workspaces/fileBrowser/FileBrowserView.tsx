@@ -6,11 +6,20 @@ import PauseIcon from '@mui/icons-material/Pause';
 import PlayArrowIcon from '@mui/icons-material/PlayArrow';
 import React, { useState, useMemo, useEffect, KeyboardEvent, useCallback } from 'react';
 
+import { WorkspaceId } from '@core/types/workspace';
 import { fileService, ipcService } from '@shared/services';
 import { useDemoPlayerStore, useUIStore } from '@shared/stores';
 import { useDebounce, logger } from '@shared/utils';
 
-export const FileBrowser: React.FC = () => {
+interface FileBrowserViewProps {
+  workspaceId: WorkspaceId;
+  zoneId: string;
+}
+
+export const FileBrowserView: React.FC<FileBrowserViewProps> = ({
+  workspaceId,
+  zoneId: _zoneId,
+}) => {
   const [currentPath, setCurrentPath] = useState<string>('');
   const [searchQuery, setSearchQuery] = useState<string>('');
   const [selectedPaths, setSelectedPaths] = useState<Set<string>>(new Set());
@@ -292,14 +301,14 @@ export const FileBrowser: React.FC = () => {
         };
         const isSameTrack = activeTrackPath === item.path;
         if (!isSameTrack || playerStatus === 'ended') {
-          await loadDemoTrack(track, 'file-browser-preview');
+          await loadDemoTrack(track, workspaceId);
         }
         await play();
       } catch (err) {
         logger.error('Failed to preview file from browser', err);
       }
     },
-    [activeTrackPath, playerStatus, loadDemoTrack, play],
+    [activeTrackPath, playerStatus, loadDemoTrack, play, workspaceId],
   );
 
   const parentPath = fileService.getParentPath(currentPath);

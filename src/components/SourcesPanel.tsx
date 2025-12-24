@@ -1,6 +1,6 @@
 import React from 'react';
 
-import { useUIStore } from '../state/uiStore';
+import { useUIStore } from '@shared/stores';
 
 import { FileBrowser } from './FileBrowser';
 

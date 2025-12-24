@@ -59,6 +59,8 @@ npm run dist:all
 - `CherryPlayList-{version}-ia32.exe` - NSIS установщик (32-bit)
 - `CherryPlayList-{version}-x64-portable.exe` - Portable версия (64-bit)
 
+**Примечание:** Portable версия создается автоматически при сборке для Windows. Команда `npm run dist:win` создает и NSIS установщик, и portable версию.
+
 ### macOS
 
 - `CherryPlayList-{version}-x64.dmg` - DMG образ (Intel)
