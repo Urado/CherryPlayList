@@ -4,7 +4,11 @@ import { createWithEqualityFn } from 'zustand/traditional';
 
 import { WorkspaceId } from '@core/types/workspace';
 
-import { DEFAULT_PLAYLIST_WORKSPACE_ID, generateWorkspaceId } from '../../core/constants/workspace';
+import {
+  DEFAULT_PLAYLIST_WORKSPACE_ID,
+  DEFAULT_PLAYER_WORKSPACE_ID,
+  generateWorkspaceId,
+} from '../../core/constants/workspace';
 import {
   Layout,
   Zone,
@@ -441,7 +445,46 @@ function createComplexLayout(): Layout {
 /**
  * Типы предустановленных layout
  */
-export type LayoutPreset = 'simple' | 'complex' | 'collections' | 'collections-vertical';
+export type LayoutPreset = 'simple' | 'complex' | 'collections' | 'collections-vertical' | 'player';
+
+/**
+ * Создает layout для player workspace
+ * Структура:
+ * - Root (horizontal)
+ *   - Player workspace (50%)
+ *   - File Browser workspace (50%)
+ */
+function createPlayerLayout(): Layout {
+  const playerZoneId = uuidv4();
+  const fileBrowserZoneId = uuidv4();
+  const rootContainerId = uuidv4();
+
+  return {
+    rootZone: {
+      id: rootContainerId,
+      type: 'container',
+      direction: 'horizontal',
+      zones: [
+        {
+          id: playerZoneId,
+          type: 'workspace',
+          workspaceId: DEFAULT_PLAYER_WORKSPACE_ID,
+          workspaceType: 'player',
+          size: 50,
+        },
+        {
+          id: fileBrowserZoneId,
+          type: 'workspace',
+          workspaceId: 'default-filebrowser-workspace',
+          workspaceType: 'fileBrowser',
+          size: 50,
+        },
+      ],
+      sizes: [50, 50],
+    },
+    version: 1,
+  };
+}
 
 /**
  * Создает layout по имени предустановки
@@ -456,6 +499,8 @@ function createLayoutByPreset(preset: LayoutPreset): Layout {
       return createCollectionsLayout();
     case 'collections-vertical':
       return createCollectionsVerticalLayout();
+    case 'player':
+      return createPlayerLayout();
     default:
       return createSimpleLayout();
   }

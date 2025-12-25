@@ -3,6 +3,7 @@ import '@workspaces/playlist';
 import '@workspaces/collection';
 import '@workspaces/fileBrowser';
 import '@workspaces/testZone';
+import '@workspaces/player';
 import { App } from '@app';
 import React from 'react';
 import ReactDOM from 'react-dom/client';

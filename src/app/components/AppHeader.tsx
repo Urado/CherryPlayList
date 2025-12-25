@@ -117,7 +117,8 @@ export const AppHeader: React.FC = () => {
       preset === 'simple' ||
       preset === 'complex' ||
       preset === 'collections' ||
-      preset === 'collections-vertical'
+      preset === 'collections-vertical' ||
+      preset === 'player'
     ) {
       setSelectedLayout(preset);
       setLayoutPreset(preset);
@@ -126,6 +127,7 @@ export const AppHeader: React.FC = () => {
         complex: 'Сложный',
         collections: 'С коллекциями',
         'collections-vertical': 'Коллекции вертикально',
+        player: 'Плеер',
       };
       addNotification({
         type: 'info',
@@ -203,6 +205,7 @@ export const AppHeader: React.FC = () => {
               <option value="collections-vertical">
                 Коллекции вертикально (Playlist + Collections + Browser)
               </option>
+              <option value="player">Плеер (Player + Browser)</option>
             </select>
           </div>
         </div>

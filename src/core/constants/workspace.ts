@@ -11,8 +11,12 @@ import { WorkspaceId, WorkspaceType } from '../../modules/dragDrop/types';
 // В будущем это будет генерироваться динамически
 export const DEFAULT_PLAYLIST_WORKSPACE_ID: WorkspaceId = 'default-playlist-workspace';
 
+// ID для player workspace
+export const DEFAULT_PLAYER_WORKSPACE_ID: WorkspaceId = 'default-player-workspace';
+
 const workspaceTypeRegistry = new Map<WorkspaceId, WorkspaceType>();
 workspaceTypeRegistry.set(DEFAULT_PLAYLIST_WORKSPACE_ID, 'playlist');
+workspaceTypeRegistry.set(DEFAULT_PLAYER_WORKSPACE_ID, 'player');
 
 /**
  * Генерирует новый UUID для workspace

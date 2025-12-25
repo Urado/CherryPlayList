@@ -9,6 +9,7 @@ import { AppHeader } from './components/AppHeader';
 import { ExportModal } from './components/ExportModal';
 import { SettingsModal } from './components/SettingsModal';
 import { SplitContainer } from './components/SplitContainer';
+import { TrackSettingsModal } from '@workspaces/player/TrackSettingsModal';
 
 const App: React.FC = () => {
   const { layout } = useLayoutStore();
@@ -28,6 +29,7 @@ const App: React.FC = () => {
         </div>
         <SettingsModal />
         <ExportModal />
+        <TrackSettingsModal />
         <NotificationContainer />
         <AppFooter />
       </div>
@@ -42,6 +44,7 @@ const App: React.FC = () => {
       </div>
       <SettingsModal />
       <ExportModal />
+      <TrackSettingsModal />
       <NotificationContainer />
       <AppFooter />
     </div>

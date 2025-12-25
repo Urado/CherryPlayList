@@ -34,3 +34,14 @@ export type {
 } from './trackWorkspaceStoreFactory';
 export { useUIStore } from './uiStore';
 export type { ModalType, Notification, WorkspaceInfo } from './uiStore';
+export { usePlayerSessionStore } from './playerSessionStore';
+export type { PlayerSessionMode } from './playerSessionStore';
+export { usePlayerAudioStore } from './playerAudioStore';
+export type { PlayerAudioStatus } from './playerAudioStore';
+export { usePlayerSettingsStore } from './playerSettingsStore';
+export type {
+  ActionAfterTrack,
+  PlayerTrackSettings,
+  PlayerGroupSettings,
+  PlayerSettings,
+} from './playerSettingsStore';

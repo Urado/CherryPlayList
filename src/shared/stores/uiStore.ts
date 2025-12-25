@@ -13,7 +13,7 @@ import { DraggedItems } from '../../modules/dragDrop/types';
 // Это позволяет очищать таймеры при ручном удалении уведомлений
 const notificationTimers = new Map<string, NodeJS.Timeout>();
 
-export type ModalType = 'settings' | 'export' | null;
+export type ModalType = 'settings' | 'export' | 'trackSettings' | null;
 
 export interface Notification {
   id: string;
