@@ -2,6 +2,8 @@ import PauseIcon from '@mui/icons-material/Pause';
 import PlayArrowIcon from '@mui/icons-material/PlayArrow';
 import SkipNextIcon from '@mui/icons-material/SkipNext';
 import StopIcon from '@mui/icons-material/Stop';
+import VolumeDownIcon from '@mui/icons-material/VolumeDown';
+import VolumeUpIcon from '@mui/icons-material/VolumeUp';
 import React, { useCallback, useMemo } from 'react';
 
 import { usePlayerAudioStore } from '@shared/stores/playerAudioStore';
@@ -118,6 +120,21 @@ export const PlayerControls: React.FC<PlayerControlsProps> = ({ onNext }) => {
         >
           <SkipNextIcon fontSize="medium" />
         </button>
+        <div className="player-controls__volume">
+          <VolumeDownIcon fontSize="small" />
+          <input
+            type="range"
+            min={0}
+            max={1}
+            step={0.01}
+            value={volume}
+            onChange={handleVolumeChange}
+            className="player-controls__volume-slider"
+            title={`Громкость: ${Math.round(volume * 100)}%`}
+          />
+          <VolumeUpIcon fontSize="small" />
+          <span className="player-controls__volume-value">{Math.round(volume * 100)}%</span>
+        </div>
       </div>
 
       <div className="player-controls__info">

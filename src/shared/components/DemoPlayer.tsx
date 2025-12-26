@@ -26,6 +26,7 @@ export interface DemoPlayerController {
   duration: number;
   volume: number;
   error: string | null;
+  isDisabled?: boolean;
   play: () => Promise<void>;
   pause: () => void;
   seek: (positionSeconds: number) => void;
@@ -47,6 +48,7 @@ export const useDemoPlayerController = (): DemoPlayerController =>
       seek: state.seek,
       setVolume: state.setVolume,
       clear: state.clear,
+      isDisabled: state.isDisabled,
     }),
     shallow,
   );
@@ -96,6 +98,7 @@ export const DemoPlayer: React.FC<DemoPlayerProps> = ({
     duration,
     volume,
     error,
+    isDisabled: storeIsDisabled,
     play,
     pause,
     seek,
@@ -105,7 +108,7 @@ export const DemoPlayer: React.FC<DemoPlayerProps> = ({
   const lastErrorRef = useRef<string | null>(null);
 
   const isPlaying = status === 'playing';
-  const isDisabled = !currentTrack || Boolean(error);
+  const isDisabled = storeIsDisabled || !currentTrack || Boolean(error);
   const resolvedDuration =
     (Number.isFinite(duration) && duration > 0 ? duration : currentTrack?.duration) ??
     (isDisabled ? 0 : 1);
@@ -180,10 +183,15 @@ export const DemoPlayer: React.FC<DemoPlayerProps> = ({
 
   const containerClassName = useMemo(
     () =>
-      ['demo-player', className, isDisabled ? 'demo-player--disabled' : null]
+      [
+        'demo-player',
+        className,
+        isDisabled ? 'demo-player--disabled' : null,
+        storeIsDisabled ? 'demo-player--blocked' : null,
+      ]
         .filter(Boolean)
         .join(' '),
-    [className, isDisabled],
+    [className, isDisabled, storeIsDisabled],
   );
 
   return (
@@ -193,14 +201,25 @@ export const DemoPlayer: React.FC<DemoPlayerProps> = ({
           type="button"
           className="demo-player__icon-button"
           onClick={handleToggle}
-          disabled={!currentTrack}
-          title={isPlaying ? 'Пауза' : 'Воспроизвести'}
+          disabled={isDisabled}
+          title={
+            storeIsDisabled
+              ? 'Демо-плеер заблокирован (используется то же устройство, что и плеер)'
+              : isPlaying
+                ? 'Пауза'
+                : 'Воспроизвести'
+          }
         >
           {isPlaying ? <PauseIcon fontSize="medium" /> : <PlayArrowIcon fontSize="medium" />}
         </button>
         <div className="demo-player__info">
           <div className="demo-player__title">{currentTrack?.name ?? 'Нет активного трека'}</div>
           {error ? <div className="demo-player__error">{error}</div> : null}
+          {storeIsDisabled && !error ? (
+            <div className="demo-player__warning">
+              Заблокирован: используется то же устройство, что и плеер
+            </div>
+          ) : null}
         </div>
         <button
           type="button"

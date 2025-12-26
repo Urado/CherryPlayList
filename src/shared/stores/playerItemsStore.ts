@@ -44,6 +44,9 @@ interface PlayerItemsState {
   removeSelectedItems: () => void;
   moveSelectedItems: (toIndex: number) => void;
   selectRange: (fromId: string, toId: string) => void;
+
+  // Track duration
+  updateTrackDuration: (id: string, duration: number) => void;
 }
 
 // Вспомогательная функция для рекурсивного поиска элемента
@@ -530,6 +533,30 @@ export const usePlayerItemsStore = createWithEqualityFn<PlayerItemsState>()(
           }
 
           set({ selectedItemIds: newSelected });
+        },
+
+        updateTrackDuration: (id, duration) => {
+          const state = get();
+          
+          // Рекурсивная функция для обновления трека в items
+          const updateTrackInItems = (items: PlayerItem[]): PlayerItem[] => {
+            return items.map((item) => {
+              if (isPlayerTrack(item) && item.id === id) {
+                return { ...item, duration };
+              }
+              if (isPlayerGroup(item)) {
+                return { ...item, items: updateTrackInItems(item.items) };
+              }
+              return item;
+            });
+          };
+
+          const newItems = updateTrackInItems(state.items);
+          set({ items: newItems });
+          
+          // Синхронизируем треки в playerStore
+          const tracks = getAllTracksRecursive(newItems);
+          usePlayerStore.getState()._setTracks(tracks);
         },
       };
     },

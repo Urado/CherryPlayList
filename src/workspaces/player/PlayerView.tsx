@@ -8,27 +8,40 @@ import TimerIcon from '@mui/icons-material/Timer';
 import React, { useCallback, useEffect, useMemo, useRef } from 'react';
 
 import { DEFAULT_PLAYER_WORKSPACE_ID } from '@core/constants/workspace';
-import { isPlayerGroup, isPlayerTrack, PlayerItem } from '@core/types/player';
+import { isPlayerGroup, isPlayerTrack, PlayerItem as PlayerItemType } from '@core/types/player';
 import { Track } from '@core/types/track';
 import { WorkspaceId } from '@core/types/workspace';
-import { PlaylistItem } from '@shared/components';
+import { PlayerItem } from '@shared/components';
 import { useTrackWorkspaceDragAndDrop, useTrackDuration } from '@shared/hooks';
 import { fileService, ipcService } from '@shared/services';
-import { useDemoPlayerStore, useUIStore } from '@shared/stores';
+import { useDemoPlayerStore, useUIStore, useSettingsStore } from '@shared/stores';
 import { usePlayerAudioStore } from '@shared/stores/playerAudioStore';
 import { usePlayerItemsStore } from '@shared/stores/playerItemsStore';
 import { usePlayerSessionStore } from '@shared/stores/playerSessionStore';
-import { usePlayerSettingsStore } from '@shared/stores/playerSettingsStore';
+import { ActionAfterTrack, usePlayerSettingsStore } from '@shared/stores/playerSettingsStore';
 import { usePlayerStore } from '@shared/stores/playerStore';
 import { formatDuration, logger } from '@shared/utils';
 import { flattenItemsForDisplay, getTracksFromDisplayItems } from '@shared/utils/playerItemsUtils';
+import { createTrackWithId, extractName } from '@shared/utils/trackFactory';
 
+import {
+  calculateDividerMarkers as calculateDividerMarkersUtil,
+  formatDividerLabel as formatDividerLabelUtil,
+  calculatePlannedEndDividerPosition,
+  calculateProjectedEndTime,
+  calculatePlannedEndMarker,
+  formatTimeFromTimestamp,
+  type DividerCalculationContext,
+} from './dividerUtils';
 import { PlayerControls } from './PlayerControls';
 
 interface PlayerViewProps {
   workspaceId: WorkspaceId;
   zoneId: string;
 }
+
+// Константы
+const DEFAULT_GROUP_INSERT_INDEX = 0;
 
 export const PlayerView: React.FC<PlayerViewProps> = ({ workspaceId: _workspaceId, zoneId }) => {
   // Используем playerItemsStore для работы с группами
@@ -47,13 +60,14 @@ export const PlayerView: React.FC<PlayerViewProps> = ({ workspaceId: _workspaceI
     getItemPath,
     createGroup,
     findItemById,
+    updateTrackDuration,
+    setGroupName,
   } = usePlayerItemsStore((state) => state);
 
   // Получаем имя из playerStore (для обратной совместимости)
-  const { name, setName, updateTrackDuration } = usePlayerStore((state) => ({
+  const { name, setName } = usePlayerStore((state) => ({
     name: state.name,
     setName: state.setName,
-    updateTrackDuration: state.updateTrackDuration,
   }));
 
   // Получаем плоский список для отображения
@@ -81,10 +95,7 @@ export const PlayerView: React.FC<PlayerViewProps> = ({ workspaceId: _workspaceI
 
   const handleAddTracks = useCallback(
     (newTracks: Omit<Track, 'id'>[]) => {
-      const tracksWithIds = newTracks.map((track) => ({
-        ...track,
-        id: `track-${Date.now()}-${Math.random()}`,
-      })) as Track[];
+      const tracksWithIds = newTracks.map(createTrackWithId);
       tracksWithIds.forEach((track) => addItem(track));
       const paths = tracksWithIds.map((track) => track.path);
       loadDurationsForTracks(paths);
@@ -94,10 +105,7 @@ export const PlayerView: React.FC<PlayerViewProps> = ({ workspaceId: _workspaceI
 
   const handleAddTracksAt = useCallback(
     (newTracks: Omit<Track, 'id'>[], index: number) => {
-      const tracksWithIds = newTracks.map((track) => ({
-        ...track,
-        id: `track-${Date.now()}-${Math.random()}`,
-      })) as Track[];
+      const tracksWithIds = newTracks.map(createTrackWithId);
       tracksWithIds.forEach((track) => addItem(track, index));
       const paths = tracksWithIds.map((track) => track.path);
       loadDurationsForTracks(paths);
@@ -122,18 +130,274 @@ export const PlayerView: React.FC<PlayerViewProps> = ({ workspaceId: _workspaceI
     loadFolderTracks: ipcService.findAudioFilesRecursive.bind(ipcService),
   });
 
+  // Функции для обработки файлов и директорий
+  const processFilesToGroup = useCallback(
+    async (files: string[], targetGroupId: string) => {
+      const validFiles = files.filter((path) => fileService.isValidAudioFile(path));
+      if (validFiles.length === 0) return;
+
+      const tracks = validFiles.map((path) => ({
+        path,
+        name: extractName(path),
+      }));
+
+      const { addItemToGroup } = usePlayerItemsStore.getState();
+      tracks.forEach((track) => {
+        const trackWithId = createTrackWithId(track);
+        // Сначала добавляем в корневой список
+        addItem(trackWithId);
+        // Затем перемещаем в группу
+        addItemToGroup(targetGroupId, trackWithId.id, DEFAULT_GROUP_INSERT_INDEX);
+        loadDurationsForTracks([trackWithId.path]);
+      });
+    },
+    [addItem, loadDurationsForTracks],
+  );
+
+  const processDirectoriesToGroup = useCallback(
+    async (directories: string[], targetGroupId: string) => {
+      if (directories.length === 0 || !ipcService.findAudioFilesRecursive) return;
+
+      const { addItemToGroup } = usePlayerItemsStore.getState();
+      for (const dir of directories) {
+        try {
+          const paths = await ipcService.findAudioFilesRecursive(dir);
+          const validPaths = paths.filter((path) => fileService.isValidAudioFile(path));
+          if (validPaths.length > 0) {
+            const tracks = validPaths.map((path) => ({
+              path,
+              name: extractName(path),
+            }));
+            tracks.forEach((track) => {
+              const trackWithId = createTrackWithId(track);
+              // Сначала добавляем в корневой список
+              addItem(trackWithId);
+              // Затем перемещаем в группу
+              addItemToGroup(targetGroupId, trackWithId.id, DEFAULT_GROUP_INSERT_INDEX);
+              loadDurationsForTracks([trackWithId.path]);
+            });
+          }
+        } catch (error) {
+          logger.error('Failed to load folder tracks', error);
+        }
+      }
+    },
+    [addItem, loadDurationsForTracks],
+  );
+
+  const processFilesToPosition = useCallback(
+    (files: string[], insertIndex: number) => {
+      const validFiles = files.filter((path) => fileService.isValidAudioFile(path));
+      if (validFiles.length === 0) return;
+
+      const tracks = validFiles.map((path) => ({
+        path,
+        name: extractName(path),
+      }));
+
+      const tracksWithIds = tracks.map(createTrackWithId);
+      tracksWithIds.forEach((track) => addItem(track, insertIndex));
+      const paths = tracksWithIds.map((track) => track.path);
+      loadDurationsForTracks(paths);
+    },
+    [addItem, loadDurationsForTracks],
+  );
+
+  const processDirectoriesToPosition = useCallback(
+    async (directories: string[], insertIndex: number) => {
+      if (directories.length === 0 || !ipcService.findAudioFilesRecursive) return;
+
+      for (const dir of directories) {
+        try {
+          const paths = await ipcService.findAudioFilesRecursive(dir);
+          const validPaths = paths.filter((path) => fileService.isValidAudioFile(path));
+          if (validPaths.length > 0) {
+            const tracks = validPaths.map((path) => ({
+              path,
+              name: extractName(path),
+            }));
+            const tracksWithIds = tracks.map(createTrackWithId);
+            tracksWithIds.forEach((track) => addItem(track, insertIndex));
+            const paths = tracksWithIds.map((track) => track.path);
+            loadDurationsForTracks(paths);
+          }
+        } catch (error) {
+          logger.error('Failed to load folder tracks', error);
+        }
+      }
+    },
+    [addItem, loadDurationsForTracks],
+  );
+
+  const processFilesToGroupAtPosition = useCallback(
+    async (files: string[], targetGroupId: string, insertIndex: number) => {
+      const validFiles = files.filter((path) => fileService.isValidAudioFile(path));
+      if (validFiles.length === 0) return;
+
+      const tracks = validFiles.map((path) => ({
+        path,
+        name: extractName(path),
+      }));
+
+      const { addItemToGroup } = usePlayerItemsStore.getState();
+      tracks.forEach((track, idx) => {
+        const trackWithId = createTrackWithId(track);
+        // Сначала добавляем в корневой список
+        addItem(trackWithId);
+        // Затем перемещаем в группу
+        addItemToGroup(targetGroupId, trackWithId.id, insertIndex + idx);
+        loadDurationsForTracks([trackWithId.path]);
+      });
+    },
+    [addItem, loadDurationsForTracks],
+  );
+
+  const processDirectoriesToGroupAtPosition = useCallback(
+    async (directories: string[], targetGroupId: string, insertIndex: number) => {
+      if (directories.length === 0 || !ipcService.findAudioFilesRecursive) return;
+
+      const { addItemToGroup } = usePlayerItemsStore.getState();
+      for (const dir of directories) {
+        try {
+          const paths = await ipcService.findAudioFilesRecursive(dir);
+          const validPaths = paths.filter((path) => fileService.isValidAudioFile(path));
+          if (validPaths.length > 0) {
+            const tracks = validPaths.map((path) => ({
+              path,
+              name: extractName(path),
+            }));
+            tracks.forEach((track, idx) => {
+              const trackWithId = createTrackWithId(track);
+              // Сначала добавляем в корневой список
+              addItem(trackWithId);
+              // Затем перемещаем в группу
+              addItemToGroup(targetGroupId, trackWithId.id, insertIndex + idx);
+              loadDurationsForTracks([trackWithId.path]);
+            });
+          }
+        } catch (error) {
+          logger.error('Failed to load folder tracks', error);
+        }
+      }
+    },
+    [addItem, loadDurationsForTracks],
+  );
+
   // Кастомная логика drag & drop для работы с группами
   const handleDropWithGroups = useCallback(
-    (e: React.DragEvent, targetItemId: string) => {
+    async (e: React.DragEvent, targetItemId: string) => {
       e.preventDefault();
       e.stopPropagation();
 
+      // Проверяем, есть ли данные из браузера файлов
+      const types = Array.from(e.dataTransfer.types);
+      const isFiles = types.includes('application/json');
+
+      if (isFiles) {
+        // Обрабатываем данные из браузера файлов
+        try {
+          const rawData = e.dataTransfer.getData('application/json');
+          const parsed = JSON.parse(rawData);
+
+          if (parsed.type === 'fileBrowser') {
+            const files: string[] = Array.isArray(parsed.paths) ? parsed.paths : [];
+            const directories: string[] = Array.isArray(parsed.directories)
+              ? parsed.directories
+              : [];
+
+            const targetDisplayItem = displayItems.find((di) => di.item.id === targetItemId);
+            if (!targetDisplayItem) {
+              playerDrag.handleDragEnd();
+              return;
+            }
+
+            const targetItem = targetDisplayItem.item;
+            const insertPosition = playerDrag.insertPosition;
+
+            // Если перетаскиваем на группу
+            if (isPlayerGroup(targetItem)) {
+              if (insertPosition === 'bottom') {
+                // Добавляем в группу
+                const targetGroupId = targetItem.id;
+                await processFilesToGroup(files, targetGroupId);
+                await processDirectoriesToGroup(directories, targetGroupId);
+              } else {
+                // Добавляем перед группой
+                const targetItemIndex = items.findIndex(
+                  (itemInList) => itemInList.id === targetItem.id,
+                );
+                if (targetItemIndex !== -1) {
+                  processFilesToPosition(files, targetItemIndex);
+                  await processDirectoriesToPosition(directories, targetItemIndex);
+                }
+              }
+              playerDrag.handleDragEnd();
+              return;
+            }
+
+            // Если перетаскиваем на трек
+            if (isPlayerTrack(targetItem)) {
+              const targetPath = getItemPath(targetItem.id);
+              const targetParentGroupId =
+                targetPath.length > 1 ? targetPath[targetPath.length - 2] : null;
+
+              if (targetParentGroupId) {
+                // Трек находится в группе
+                const targetParentGroup = findItemById(targetParentGroupId);
+                if (targetParentGroup && isPlayerGroup(targetParentGroup)) {
+                  const targetIndexInGroup = targetParentGroup.items.findIndex(
+                    (item) => item.id === targetItem.id,
+                  );
+
+                  if (targetIndexInGroup !== -1) {
+                    let insertIndex = targetIndexInGroup;
+                    if (insertPosition === 'bottom') {
+                      insertIndex = targetIndexInGroup + 1;
+                    }
+
+                    await processFilesToGroupAtPosition(files, targetParentGroupId, insertIndex);
+                    await processDirectoriesToGroupAtPosition(
+                      directories,
+                      targetParentGroupId,
+                      insertIndex,
+                    );
+                  }
+                }
+              } else {
+                // Трек находится в корневом списке
+                const targetItemIndex = items.findIndex(
+                  (itemInList) => itemInList.id === targetItem.id,
+                );
+                if (targetItemIndex !== -1) {
+                  let finalIndex = targetItemIndex;
+                  if (insertPosition === 'bottom') {
+                    finalIndex = targetItemIndex + 1;
+                  }
+
+                  processFilesToPosition(files, finalIndex);
+                  await processDirectoriesToPosition(directories, finalIndex);
+                }
+              }
+              playerDrag.handleDragEnd();
+              return;
+            }
+          }
+        } catch (error) {
+          logger.error('Failed to parse file browser data', error);
+        }
+        playerDrag.handleDragEnd();
+        return;
+      }
+
+      // Обрабатываем перетаскивание треков внутри плейлиста
       if (!playerDrag.draggedItems || playerDrag.draggedItems.type !== 'tracks') {
+        playerDrag.handleDragEnd();
         return;
       }
 
       const draggedIds = Array.from(playerDrag.draggedItems.ids);
       if (draggedIds.length === 0) {
+        playerDrag.handleDragEnd();
         return;
       }
 
@@ -146,7 +410,7 @@ export const PlayerView: React.FC<PlayerViewProps> = ({ workspaceId: _workspaceI
       const insertPosition = playerDrag.insertPosition;
 
       // Получаем перетаскиваемые элементы (только корневые, не вложенные)
-      const draggedItems: PlayerItem[] = [];
+      const draggedItems: PlayerItemType[] = [];
       draggedIds.forEach((id) => {
         const item = findItemById(id);
         if (item) {
@@ -201,7 +465,7 @@ export const PlayerView: React.FC<PlayerViewProps> = ({ workspaceId: _workspaceI
           // addItemToGroup сам удаляет элемент из текущего места
           const { addItemToGroup } = usePlayerItemsStore.getState();
           validItemsToAdd.forEach((item) => {
-            addItemToGroup(targetGroupId, item.id, 0); // Добавляем в начало группы
+            addItemToGroup(targetGroupId, item.id, DEFAULT_GROUP_INSERT_INDEX); // Добавляем в начало группы
           });
         } else {
           // Добавляем перед группой (в корневой список)
@@ -362,7 +626,22 @@ export const PlayerView: React.FC<PlayerViewProps> = ({ workspaceId: _workspaceI
       // Если не удалось обработать, используем стандартную логику
       playerDrag.handleDragEnd();
     },
-    [displayItems, findItemById, getItemPath, removeItem, addItem, moveItem, items, playerDrag],
+    [
+      displayItems,
+      findItemById,
+      getItemPath,
+      removeItem,
+      addItem,
+      moveItem,
+      items,
+      playerDrag,
+      processFilesToGroup,
+      processDirectoriesToGroup,
+      processFilesToPosition,
+      processDirectoriesToPosition,
+      processFilesToGroupAtPosition,
+      processDirectoriesToGroupAtPosition,
+    ],
   );
 
   // Состояние сессии
@@ -378,7 +657,25 @@ export const PlayerView: React.FC<PlayerViewProps> = ({ workspaceId: _workspaceI
     toggleGroupDisabled,
     isGroupDisabled,
   } = usePlayerSessionStore();
+
+  // Подписка на состояния для корректного пересчёта зависимостей
+  // Используем отсортированную строку ID вместо самого Set для надёжного отслеживания изменений
+  // Это необходимо, так как функции isTrackDisabled/isGroupDisabled/isTrackPlayed
+  // не меняют свою ссылку при изменении состояния в store
+  const disabledTracksKey = usePlayerSessionStore((state) =>
+    Array.from(state.disabledTrackIds).sort().join(','),
+  );
+  const disabledGroupsKey = usePlayerSessionStore((state) =>
+    Array.from(state.disabledGroupIds).sort().join(','),
+  );
+  const playedTracksKey = usePlayerSessionStore((state) =>
+    Array.from(state.playedTrackIds).sort().join(','),
+  );
+
   const isPreparationMode = mode === 'preparation';
+
+  // Настройки отсечек
+  const { hourDividerInterval, showHourDividers } = useSettingsStore();
 
   // Вспомогательная функция для проверки, отключен ли трек (с учетом родительских групп)
   const isTrackOrGroupDisabled = useCallback(
@@ -405,7 +702,25 @@ export const PlayerView: React.FC<PlayerViewProps> = ({ workspaceId: _workspaceI
 
       return false;
     },
-    [isTrackDisabled, isGroupDisabled, getItemPath, findItemById],
+    // Примечание: disabledTracksKey и disabledGroupsKey необходимы для пересчёта функции
+    // при изменении состояния disabled tracks/groups, так как функции isTrackDisabled/isGroupDisabled
+    // не меняют свою ссылку при изменении store
+    [
+      isTrackDisabled,
+      isGroupDisabled,
+      getItemPath,
+      findItemById,
+      disabledTracksKey,
+      disabledGroupsKey,
+    ],
+  );
+
+  // Функция для проверки, является ли трек активным (не проигран и не отключен)
+  const isTrackActive = useCallback(
+    (trackId: string): boolean => {
+      return !isTrackPlayed(trackId) && !isTrackOrGroupDisabled(trackId);
+    },
+    [isTrackPlayed, isTrackOrGroupDisabled],
   );
 
   // Демо-плеер для режима подготовки
@@ -422,6 +737,7 @@ export const PlayerView: React.FC<PlayerViewProps> = ({ workspaceId: _workspaceI
   const {
     currentTrack: activePlayerTrack,
     status: playerAudioStatus,
+    position: currentTrackPosition,
     loadTrack: loadPlayerTrack,
     play: playPlayer,
     pause: pausePlayer,
@@ -488,9 +804,7 @@ export const PlayerView: React.FC<PlayerViewProps> = ({ workspaceId: _workspaceI
     }
 
     // Проверяем наличие активных (не отключённых) треков
-    const hasActiveTracks = allTracks.some(
-      (track) => !isTrackPlayed(track.id) && !isTrackOrGroupDisabled(track.id),
-    );
+    const hasActiveTracks = allTracks.some((track) => isTrackActive(track.id));
     if (!hasActiveTracks) {
       return;
     }
@@ -499,9 +813,7 @@ export const PlayerView: React.FC<PlayerViewProps> = ({ workspaceId: _workspaceI
     startSession();
 
     // Находим первый активный трек (не проигранный, не отключённый)
-    const firstActiveTrack = allTracks.find(
-      (track) => !isTrackPlayed(track.id) && !isTrackOrGroupDisabled(track.id),
-    );
+    const firstActiveTrack = allTracks.find((track) => isTrackActive(track.id));
 
     if (firstActiveTrack) {
       try {
@@ -515,15 +827,7 @@ export const PlayerView: React.FC<PlayerViewProps> = ({ workspaceId: _workspaceI
         logger.error('Failed to start first track playback', error);
       }
     }
-  }, [
-    startSession,
-    allTracks,
-    isTrackPlayed,
-    isTrackOrGroupDisabled,
-    loadPlayerTrack,
-    setCurrentTrack,
-    playPlayer,
-  ]);
+  }, [startSession, allTracks, isTrackActive, loadPlayerTrack, setCurrentTrack, playPlayer]);
 
   const handleResetSession = useCallback(() => {
     clearPauseTimer(); // Очищаем таймер паузы при сбросе
@@ -541,6 +845,7 @@ export const PlayerView: React.FC<PlayerViewProps> = ({ workspaceId: _workspaceI
     setEditingGlobal,
     defaultActionAfterTrack,
     defaultPauseBetweenTracks,
+    plannedEndTime,
   } = usePlayerSettingsStore();
 
   const handleOpenTrackSettings = useCallback(
@@ -568,39 +873,61 @@ export const PlayerView: React.FC<PlayerViewProps> = ({ workspaceId: _workspaceI
     (trackId: string) => {
       const trackSettings = getTrackSettings(trackId);
 
-      // Если у трека есть индивидуальные настройки, используем их
+      // Определяем actionAfterTrack с учетом иерархии
+      let effectiveActionAfterTrack: ActionAfterTrack = defaultActionAfterTrack;
+      let effectivePauseBetweenTracks: number = defaultPauseBetweenTracks;
+
+      // 1. Проверяем настройки трека
       if (trackSettings.actionAfterTrack !== null && trackSettings.actionAfterTrack !== undefined) {
-        return {
-          actionAfterTrack: trackSettings.actionAfterTrack,
-          pauseBetweenTracks: trackSettings.pauseBetweenTracks ?? defaultPauseBetweenTracks,
-        };
-      }
+        effectiveActionAfterTrack = trackSettings.actionAfterTrack;
+        // Если у трека есть actionAfterTrack, используем pauseBetweenTracks из трека или глобальные
+        effectivePauseBetweenTracks =
+          trackSettings.pauseBetweenTracks !== null &&
+          trackSettings.pauseBetweenTracks !== undefined
+            ? trackSettings.pauseBetweenTracks
+            : defaultPauseBetweenTracks;
+      } else {
+        // 2. Ищем настройки в группах (от ближайшей к дальней)
+        const path = getItemPath(trackId);
+        let foundInGroup = false;
 
-      // Получаем путь к треку через группы
-      const path = getItemPath(trackId);
-
-      // Ищем настройки групп в порядке от ближайшей к дальней
-      for (let i = path.length - 1; i >= 0; i--) {
-        const itemId = path[i];
-        const item = findItemById(itemId);
-        if (item && isPlayerGroup(item)) {
-          const groupSettings = getGroupSettings(itemId);
-          if (
-            groupSettings.actionAfterTrack !== null &&
-            groupSettings.actionAfterTrack !== undefined
-          ) {
-            return {
-              actionAfterTrack: groupSettings.actionAfterTrack,
-              pauseBetweenTracks: groupSettings.pauseBetweenTracks ?? defaultPauseBetweenTracks,
-            };
+        for (let i = path.length - 1; i >= 0; i--) {
+          const itemId = path[i];
+          const item = findItemById(itemId);
+          if (item && isPlayerGroup(item)) {
+            const groupSettings = getGroupSettings(itemId);
+            if (
+              groupSettings.actionAfterTrack !== null &&
+              groupSettings.actionAfterTrack !== undefined
+            ) {
+              effectiveActionAfterTrack = groupSettings.actionAfterTrack;
+              // Используем pauseBetweenTracks из группы или глобальные
+              effectivePauseBetweenTracks =
+                groupSettings.pauseBetweenTracks !== null &&
+                groupSettings.pauseBetweenTracks !== undefined
+                  ? groupSettings.pauseBetweenTracks
+                  : defaultPauseBetweenTracks;
+              foundInGroup = true;
+              break;
+            }
           }
+        }
+
+        // 3. Если не нашли в группах, используем глобальные настройки
+        if (!foundInGroup) {
+          effectiveActionAfterTrack = defaultActionAfterTrack;
+          // Если у трека есть pauseBetweenTracks, используем его, иначе глобальные
+          effectivePauseBetweenTracks =
+            trackSettings.pauseBetweenTracks !== null &&
+            trackSettings.pauseBetweenTracks !== undefined
+              ? trackSettings.pauseBetweenTracks
+              : defaultPauseBetweenTracks;
         }
       }
 
-      // Используем настройки по умолчанию
       return {
-        actionAfterTrack: defaultActionAfterTrack,
-        pauseBetweenTracks: defaultPauseBetweenTracks,
+        actionAfterTrack: effectiveActionAfterTrack,
+        pauseBetweenTracks: effectivePauseBetweenTracks,
       };
     },
     [
@@ -613,6 +940,84 @@ export const PlayerView: React.FC<PlayerViewProps> = ({ workspaceId: _workspaceI
     ],
   );
 
+  // Функция для расчета длительности трека с учетом паузы
+  const calculateTrackDurationWithPause = useCallback(
+    (track: Track, includePause: boolean = true): number => {
+      let duration = track.duration || 0;
+      if (includePause) {
+        const settings = getEffectiveTrackSettings(track.id);
+        if (settings.actionAfterTrack === 'pauseAndNext') {
+          duration += settings.pauseBetweenTracks || 0;
+        }
+      }
+      return duration;
+    },
+    [getEffectiveTrackSettings],
+  );
+
+  // Вычисление позиций отсечек (возвращает Map: trackId -> время отсечки в формате timestamp)
+  // В режиме сессии: старт отсчета - текущий трек и текущее время, проигранные и отключенные треки игнорируются
+  const dividerCalculationContext: DividerCalculationContext = useMemo(
+    () => ({
+      tracks: allTracks,
+      activeTrackId: activePlayerTrackId ?? null,
+      currentTrackPosition,
+      mode,
+      hourDividerInterval,
+      isTrackDisabled: isTrackOrGroupDisabled,
+      isTrackPlayed,
+      calculateTrackDurationWithPause,
+    }),
+    [
+      allTracks,
+      activePlayerTrackId,
+      currentTrackPosition,
+      mode,
+      hourDividerInterval,
+      isTrackOrGroupDisabled,
+      isTrackPlayed,
+      calculateTrackDurationWithPause,
+    ],
+  );
+
+  const dividerMarkersResult = useMemo(() => {
+    if (!showHourDividers || hourDividerInterval <= 0 || allTracks.length === 0) {
+      return {
+        markers: new Map<string, number | null>(),
+        startPosition: {
+          startFromIndex: 0,
+          currentTimeOffset: 0,
+          currentRealTime: null,
+        },
+        nextEvenTime: null,
+        plannedEndMarker: null,
+      };
+    }
+    return calculateDividerMarkersUtil({
+      ...dividerCalculationContext,
+      showHourDividers,
+      plannedEndTime: mode === 'session' ? plannedEndTime : null,
+    });
+  }, [
+    dividerCalculationContext,
+    showHourDividers,
+    hourDividerInterval,
+    allTracks.length,
+    mode,
+    plannedEndTime,
+  ]);
+
+  const calculateDividerMarkers = dividerMarkersResult.markers;
+
+  // Форматирование метки отсечки
+  // Использует данные из calculateDividerMarkers, чтобы избежать несоответствий
+  const formatDividerLabel = useCallback(
+    (trackId: string): string => {
+      return formatDividerLabelUtil(trackId, dividerCalculationContext, dividerMarkersResult);
+    },
+    [dividerCalculationContext, dividerMarkersResult],
+  );
+
   // Функция для получения следующего активного трека
   const getNextActiveTrack = useCallback(() => {
     const currentIndex = allTracks.findIndex((t) => t.id === activePlayerTrackId);
@@ -620,7 +1025,7 @@ export const PlayerView: React.FC<PlayerViewProps> = ({ workspaceId: _workspaceI
       // Если текущего трека нет, ищем первый активный трек
       for (let i = 0; i < allTracks.length; i++) {
         const track = allTracks[i];
-        if (!isTrackPlayed(track.id) && !isTrackOrGroupDisabled(track.id)) {
+        if (isTrackActive(track.id)) {
           return track;
         }
       }
@@ -630,13 +1035,13 @@ export const PlayerView: React.FC<PlayerViewProps> = ({ workspaceId: _workspaceI
     // Ищем следующий активный трек (не проигранный, не отключенный)
     for (let i = currentIndex + 1; i < allTracks.length; i++) {
       const track = allTracks[i];
-      if (!isTrackPlayed(track.id) && !isTrackOrGroupDisabled(track.id)) {
+      if (isTrackActive(track.id)) {
         return track;
       }
     }
 
     return null;
-  }, [allTracks, activePlayerTrackId, isTrackPlayed, isTrackOrGroupDisabled]);
+  }, [allTracks, activePlayerTrackId, isTrackActive]);
 
   // Функция для пометки пропущенных отключённых треков как проигранных
   const markSkippedDisabledTracks = useCallback(
@@ -648,7 +1053,16 @@ export const PlayerView: React.FC<PlayerViewProps> = ({ workspaceId: _workspaceI
         }
       }
     },
-    [allTracks, isTrackOrGroupDisabled, isTrackPlayed, markTrackAsPlayed],
+    // Примечание: ключи необходимы для пересчёта при изменении состояния
+    [
+      allTracks,
+      isTrackOrGroupDisabled,
+      isTrackPlayed,
+      markTrackAsPlayed,
+      disabledTracksKey,
+      disabledGroupsKey,
+      playedTracksKey,
+    ],
   );
 
   // Обработчик окончания трека
@@ -859,6 +1273,8 @@ export const PlayerView: React.FC<PlayerViewProps> = ({ workspaceId: _workspaceI
     isTrackPlayed,
     activePlayerTrackId,
     getAllTracksInOrder,
+    // Примечание: playedTracksKey необходим для пересчёта при изменении played tracks
+    playedTracksKey,
   ]);
 
   // Обработчик удаления выбранных элементов с проверкой
@@ -893,6 +1309,70 @@ export const PlayerView: React.FC<PlayerViewProps> = ({ workspaceId: _workspaceI
     }
     return total;
   }, [allTracks, isTrackOrGroupDisabled, getEffectiveTrackSettings]);
+
+  // Прогнозируемое время окончания плейлиста
+  // Использует ту же логику, что и calculateDividerMarkers
+  const projectedEndTime = useMemo(() => {
+    return calculateProjectedEndTime(dividerCalculationContext);
+  }, [dividerCalculationContext]);
+
+  // Форматирование прогнозируемого времени окончания
+  const formatProjectedEndTime = useCallback((): string => {
+    if (projectedEndTime === null) {
+      return '';
+    }
+    return formatTimeFromTimestamp(projectedEndTime);
+  }, [projectedEndTime]);
+
+  // Форматирование метки планового времени окончания
+  const formatPlannedEndTimeLabel = useCallback((): string => {
+    if (plannedEndTime === null) {
+      return '';
+    }
+    return formatTimeFromTimestamp(plannedEndTime);
+  }, [plannedEndTime]);
+
+  // Вычисление plannedEndMarker независимо от showHourDividers
+  // Красная отсечка должна показываться всегда при наличии plannedEndTime
+  const plannedEndMarker = useMemo(() => {
+    if (!isPreparationMode && allTracks.length > 0 && plannedEndTime !== null) {
+      return calculatePlannedEndMarker(dividerCalculationContext, plannedEndTime);
+    }
+    return null;
+  }, [isPreparationMode, allTracks.length, plannedEndTime, dividerCalculationContext]);
+
+  // Форматирование времени из plannedEndMarker (для отображения на отсечке)
+  const formatPlannedEndMarkerTime = useCallback((): string => {
+    const markerTime = plannedEndMarker?.time;
+    if (markerTime !== null && markerTime !== undefined && markerTime > 0) {
+      return formatTimeFromTimestamp(markerTime);
+    }
+    return formatPlannedEndTimeLabel();
+  }, [plannedEndMarker, formatPlannedEndTimeLabel]);
+
+  // Вычисление позиции красной отсечки о конце
+  // Использует plannedEndMarker, вычисленный независимо от showHourDividers
+  const plannedEndDividerPosition = useMemo(() => {
+    if (!isPreparationMode && allTracks.length > 0 && plannedEndMarker !== null) {
+      // Создаём временный объект DividerMarkers для использования существующей функции
+      const tempMarkers = {
+        markers: new Map<string, number | null>(),
+        startPosition: dividerMarkersResult.startPosition,
+        nextEvenTime: null,
+        plannedEndMarker,
+      };
+      return calculatePlannedEndDividerPosition(tempMarkers, displayItems, isPlayerTrack);
+    }
+    // Если не нашли позицию или в режиме подготовки, возвращаем null (отсечка в конце)
+    return null;
+  }, [
+    isPreparationMode,
+    allTracks.length,
+    plannedEndMarker,
+    displayItems,
+    isPlayerTrack,
+    dividerMarkersResult.startPosition,
+  ]);
 
   // Функция для проверки, являются ли выбранные элементы соседними
   const areItemsConsecutive = useCallback(
@@ -992,6 +1472,12 @@ export const PlayerView: React.FC<PlayerViewProps> = ({ workspaceId: _workspaceI
               <span style={{ margin: '0 8px' }}>•</span>
               <TimerIcon style={{ fontSize: '18px', marginRight: '4px' }} />
               <span>{formatDuration(totalDuration)}</span>
+              {projectedEndTime !== null && (
+                <>
+                  <span style={{ margin: '0 8px' }}>•</span>
+                  <span>Окончание: {formatProjectedEndTime()}</span>
+                </>
+              )}
             </>
           )}
         </div>
@@ -1055,7 +1541,7 @@ export const PlayerView: React.FC<PlayerViewProps> = ({ workspaceId: _workspaceI
           </div>
         ) : (
           <>
-            {displayItems.map((displayItem) => {
+            {displayItems.map((displayItem, displayItemIndex) => {
               const { item, level, displayIndex } = displayItem;
               const isGroup = isPlayerGroup(item);
               const track = isPlayerTrack(item) ? item : null;
@@ -1067,6 +1553,28 @@ export const PlayerView: React.FC<PlayerViewProps> = ({ workspaceId: _workspaceI
                 playerDrag.dragOverId === item.id && playerDrag.insertPosition !== null;
               const isActive = activeTrackId === item.id;
               const isPlaying = isActive && playerStatus === 'playing';
+
+              // Показываем красную отсечку перед текущим треком, если plannedEndDividerPosition === -1
+              // Отсечка показывается только для треков, не для групп
+              const showPlannedEndDividerBeforeActive =
+                !isPreparationMode &&
+                plannedEndTime !== null &&
+                plannedEndDividerPosition === -1 &&
+                isActive &&
+                track !== null;
+
+              // Проверяем, нужно ли показать отсечку для этого трека
+              const hasPlannedEndDivider =
+                !isPreparationMode &&
+                plannedEndTime !== null &&
+                plannedEndDividerPosition === displayItemIndex;
+              const showDivider =
+                showHourDividers &&
+                isPlayerTrack(item) &&
+                track !== null &&
+                calculateDividerMarkers.has(track.id) &&
+                !hasPlannedEndDivider; // Не показываем обычную отсечку, если на этой позиции красная
+              const dividerTime = track ? (calculateDividerMarkers.get(track.id) ?? null) : null;
 
               // Получаем настройки для отображения индикатора
               let hasCustomSettings = false;
@@ -1111,12 +1619,43 @@ export const PlayerView: React.FC<PlayerViewProps> = ({ workspaceId: _workspaceI
                       (t) => isTrackPlayed(t.id) || t.id === activePlayerTrackId,
                     )));
 
+              // Вычисляем длительность группы с учетом пауз между треками
+              let groupDurationWithPauses: number | undefined = undefined;
+              if (isGroup) {
+                const groupTracks = getAllTracksInOrder([item]);
+                let total = 0;
+                for (let i = 0; i < groupTracks.length; i++) {
+                  const groupTrack = groupTracks[i];
+                  total += groupTrack.duration || 0;
+                  // Получаем эффективные настройки для трека (учитывает иерархию: трек -> группа -> глобальные)
+                  const settings = getEffectiveTrackSettings(groupTrack.id);
+                  // Если действие "pauseAndNext", добавляем время паузы
+                  // pauseBetweenTracks уже учитывает иерархию в getEffectiveTrackSettings
+                  if (settings.actionAfterTrack === 'pauseAndNext') {
+                    // Добавляем паузу после каждого трека с настройкой pauseAndNext
+                    // (включая последний трек в группе)
+                    total += settings.pauseBetweenTracks || 0;
+                  }
+                }
+                // Если есть хотя бы один трек с длительностью, возвращаем результат
+                const hasAnyDuration = groupTracks.some((t) => t.duration && t.duration > 0);
+                groupDurationWithPauses = hasAnyDuration ? total : undefined;
+              }
+
               return (
                 <React.Fragment key={item.id}>
                   {showInsertLine && playerDrag.insertPosition === 'top' && (
                     <div className="drag-insert-line" />
                   )}
-                  <PlaylistItem
+                  {/* Красная отсечка перед текущим треком, если plannedEndDividerPosition === -1 */}
+                  {showPlannedEndDividerBeforeActive && (
+                    <div className="playlist-hour-divider playlist-hour-divider--planned-end">
+                      <span className="playlist-hour-divider-label">
+                        {formatPlannedEndTimeLabel()}
+                      </span>
+                    </div>
+                  )}
+                  <PlayerItem
                     item={item}
                     index={displayIndex}
                     level={level}
@@ -1177,6 +1716,8 @@ export const PlayerView: React.FC<PlayerViewProps> = ({ workspaceId: _workspaceI
                     onToggleDisabled={handleToggleDisabled}
                     isLocked={isLocked}
                     showDisableButton={!isPreparationMode}
+                    groupDuration={groupDurationWithPauses}
+                    onRenameGroup={setGroupName}
                     settingsButton={
                       <button
                         className="playlist-item-settings"
@@ -1202,9 +1743,41 @@ export const PlayerView: React.FC<PlayerViewProps> = ({ workspaceId: _workspaceI
                   {showInsertLine && playerDrag.insertPosition === 'bottom' && (
                     <div className="drag-insert-line" />
                   )}
+                  {/* Отсечка после трека */}
+                  {showDivider && track && (
+                    <div className="playlist-hour-divider">
+                      <span className="playlist-hour-divider-label">
+                        {mode === 'session' &&
+                        dividerTime !== undefined &&
+                        dividerTime !== null &&
+                        dividerTime > 0
+                          ? formatTimeFromTimestamp(dividerTime)
+                          : formatDividerLabel(track.id)}
+                      </span>
+                    </div>
+                  )}
+                  {/* Красная отсечка о конце плейлиста (только в режиме сессии) */}
+                  {hasPlannedEndDivider && (
+                    <div className="playlist-hour-divider playlist-hour-divider--planned-end">
+                      <span className="playlist-hour-divider-label">
+                        {mode === 'session'
+                          ? formatPlannedEndMarkerTime()
+                          : formatPlannedEndTimeLabel()}
+                      </span>
+                    </div>
+                  )}
                 </React.Fragment>
               );
             })}
+            {/* Красная отсечка в конце, если plannedEndTime позже реального окончания */}
+            {!isPreparationMode &&
+              plannedEndTime !== null &&
+              plannedEndDividerPosition === null &&
+              displayItems.length > 0 && (
+                <div className="playlist-hour-divider playlist-hour-divider--planned-end">
+                  <span className="playlist-hour-divider-label">{formatPlannedEndTimeLabel()}</span>
+                </div>
+              )}
           </>
         )}
       </div>

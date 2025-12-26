@@ -2,6 +2,10 @@ import CloseIcon from '@mui/icons-material/Close';
 import React, { useState, useEffect, useRef } from 'react';
 
 import { useSettingsStore, useUIStore } from '@shared/stores';
+import { usePlayerSettingsStore } from '@shared/stores/playerSettingsStore';
+import { usePlayerAudioStore } from '@shared/stores/playerAudioStore';
+import { useDemoPlayerStore } from '@shared/stores/demoPlayerStore';
+import { AudioDevice, getAudioOutputDevices, getDefaultDeviceId } from '@shared/utils/audioDevices';
 
 // Предустановленные интервалы отсечек
 const DIVIDER_INTERVALS = [
@@ -22,10 +26,44 @@ export const SettingsModal: React.FC = () => {
     showHourDividers,
     setShowHourDividers,
   } = useSettingsStore();
+  const {
+    playerAudioDeviceId,
+    demoPlayerAudioDeviceId,
+    setPlayerAudioDeviceId,
+    setDemoPlayerAudioDeviceId,
+  } = usePlayerSettingsStore();
+
   const [localTrackItemSizePreset, setLocalTrackItemSizePreset] = useState(trackItemSizePreset);
   const [localHourDividerInterval, setLocalHourDividerInterval] = useState(hourDividerInterval);
   const [localShowHourDividers, setLocalShowHourDividers] = useState(showHourDividers);
+  const [localPlayerDeviceId, setLocalPlayerDeviceId] = useState<string | null>(
+    playerAudioDeviceId,
+  );
+  const [localDemoPlayerDeviceId, setLocalDemoPlayerDeviceId] = useState<string | null>(
+    demoPlayerAudioDeviceId,
+  );
+
+  // Состояние для аудиоустройств
+  const [audioDevices, setAudioDevices] = useState<AudioDevice[]>([]);
+  const [loadingDevices, setLoadingDevices] = useState(false);
+
   const prevModalRef = useRef(modal);
+
+  // Загружаем список устройств при открытии настроек
+  useEffect(() => {
+    if (modal === 'settings' && prevModalRef.current !== 'settings') {
+      setLoadingDevices(true);
+      getAudioOutputDevices()
+        .then((devices) => {
+          setAudioDevices(devices);
+          setLoadingDevices(false);
+        })
+        .catch((error) => {
+          console.error('Failed to load audio devices', error);
+          setLoadingDevices(false);
+        });
+    }
+  }, [modal]);
 
   // Синхронизируем локальные значения при открытии модального окна
   // Это стандартный паттерн для модальных окон - синхронизация состояния при открытии
@@ -37,20 +75,50 @@ export const SettingsModal: React.FC = () => {
         setLocalTrackItemSizePreset(trackItemSizePreset);
         setLocalHourDividerInterval(hourDividerInterval);
         setLocalShowHourDividers(showHourDividers);
+        setLocalPlayerDeviceId(playerAudioDeviceId);
+        setLocalDemoPlayerDeviceId(demoPlayerAudioDeviceId);
       }, 0);
       return () => clearTimeout(timeoutId);
     }
     prevModalRef.current = modal;
-  }, [modal, trackItemSizePreset, hourDividerInterval, showHourDividers]);
+  }, [
+    modal,
+    trackItemSizePreset,
+    hourDividerInterval,
+    showHourDividers,
+    playerAudioDeviceId,
+    demoPlayerAudioDeviceId,
+  ]);
 
   if (modal !== 'settings') {
     return null;
   }
 
-  const handleSave = () => {
+  const handleSave = async () => {
     setTrackItemSizePreset(localTrackItemSizePreset);
     setHourDividerInterval(localHourDividerInterval);
     setShowHourDividers(localShowHourDividers);
+
+    // Сохраняем выбранные устройства
+    setPlayerAudioDeviceId(localPlayerDeviceId);
+    setDemoPlayerAudioDeviceId(localDemoPlayerDeviceId);
+
+    // Применяем выбранные устройства к плеерам
+    try {
+      if (localPlayerDeviceId !== null) {
+        await usePlayerAudioStore.getState().setAudioDevice(localPlayerDeviceId);
+      }
+      if (localDemoPlayerDeviceId !== null) {
+        await useDemoPlayerStore.getState().setAudioDevice(localDemoPlayerDeviceId);
+      }
+    } catch (error) {
+      console.error('Failed to apply audio devices', error);
+      addNotification({
+        type: 'warning',
+        message: 'Не удалось применить выбранные аудиоустройства',
+      });
+    }
+
     addNotification({ type: 'success', message: 'Настройки сохранены' });
     closeModal();
   };
@@ -59,6 +127,8 @@ export const SettingsModal: React.FC = () => {
     setLocalTrackItemSizePreset(trackItemSizePreset);
     setLocalHourDividerInterval(hourDividerInterval);
     setLocalShowHourDividers(showHourDividers);
+    setLocalPlayerDeviceId(playerAudioDeviceId);
+    setLocalDemoPlayerDeviceId(demoPlayerAudioDeviceId);
     closeModal();
   };
 
@@ -143,6 +213,58 @@ export const SettingsModal: React.FC = () => {
                 </option>
               ))}
             </select>
+          </div>
+
+          <div className="settings-group">
+            <label className="settings-label" htmlFor="player-audio-device">
+              Аудиоустройство для плеера
+            </label>
+            {loadingDevices ? (
+              <div className="settings-loading">Загрузка устройств...</div>
+            ) : (
+              <select
+                className="settings-select"
+                value={localPlayerDeviceId || getDefaultDeviceId()}
+                onChange={(e) => {
+                  const value = e.target.value;
+                  setLocalPlayerDeviceId(value === getDefaultDeviceId() ? null : value);
+                }}
+                id="player-audio-device"
+              >
+                <option value={getDefaultDeviceId()}>По умолчанию</option>
+                {audioDevices.map((device) => (
+                  <option key={device.deviceId} value={device.deviceId}>
+                    {device.label}
+                  </option>
+                ))}
+              </select>
+            )}
+          </div>
+
+          <div className="settings-group">
+            <label className="settings-label" htmlFor="demo-player-audio-device">
+              Аудиоустройство для демо-плеера
+            </label>
+            {loadingDevices ? (
+              <div className="settings-loading">Загрузка устройств...</div>
+            ) : (
+              <select
+                className="settings-select"
+                value={localDemoPlayerDeviceId || getDefaultDeviceId()}
+                onChange={(e) => {
+                  const value = e.target.value;
+                  setLocalDemoPlayerDeviceId(value === getDefaultDeviceId() ? null : value);
+                }}
+                id="demo-player-audio-device"
+              >
+                <option value={getDefaultDeviceId()}>По умолчанию</option>
+                {audioDevices.map((device) => (
+                  <option key={device.deviceId} value={device.deviceId}>
+                    {device.label}
+                  </option>
+                ))}
+              </select>
+            )}
           </div>
         </div>
 

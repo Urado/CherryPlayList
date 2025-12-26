@@ -340,6 +340,11 @@
   opacity: 0.8;
 }
 
+.playlist-hour-divider--planned-end {
+  background-color: #f44336;
+  opacity: 1;
+}
+
 .playlist-hour-divider-label {
   position: absolute;
   left: 50%;

@@ -18,6 +18,8 @@ export const TrackSettingsModal: React.FC = () => {
     editingTrackId,
     editingGroupId,
     editingIsGlobal,
+    plannedEndTime,
+    setPlannedEndTime,
   } = usePlayerSettingsStore();
 
   const trackId = editingTrackId;
@@ -41,6 +43,29 @@ export const TrackSettingsModal: React.FC = () => {
     currentSettings.pauseBetweenTracks ?? defaultPauseBetweenTracks,
   );
 
+  // Конвертация timestamp в строку времени HH:MM
+  const timestampToTimeString = (timestamp: number | null): string => {
+    if (timestamp === null) return '';
+    const date = new Date(timestamp);
+    const hours = date.getHours().toString().padStart(2, '0');
+    const minutes = date.getMinutes().toString().padStart(2, '0');
+    return `${hours}:${minutes}`;
+  };
+
+  // Конвертация строки времени HH:MM в timestamp для текущего дня
+  const timeStringToTimestamp = (timeString: string): number | null => {
+    if (!timeString) return null;
+    const [hours, minutes] = timeString.split(':').map(Number);
+    if (isNaN(hours) || isNaN(minutes)) return null;
+    const today = new Date();
+    today.setHours(hours, minutes, 0, 0);
+    return today.getTime();
+  };
+
+  const [localPlannedEndTime, setLocalPlannedEndTime] = useState<string>(
+    timestampToTimeString(plannedEndTime),
+  );
+
   const prevModalRef = useRef<string | null>(null);
   const modal = useUIStore((state) => state.modal);
 
@@ -57,11 +82,24 @@ export const TrackSettingsModal: React.FC = () => {
               : {};
         setLocalActionAfterTrack(settings.actionAfterTrack || 'default');
         setLocalPauseBetweenTracks(settings.pauseBetweenTracks ?? defaultPauseBetweenTracks);
+        if (isGlobal) {
+          setLocalPlannedEndTime(timestampToTimeString(plannedEndTime));
+        }
       }, 0);
       return () => clearTimeout(timeoutId);
     }
     prevModalRef.current = modal;
-  }, [modal, isGlobal, trackId, groupId, defaultPauseBetweenTracks, defaultActionAfterTrack, getTrackSettings, getGroupSettings]);
+  }, [
+    modal,
+    isGlobal,
+    trackId,
+    groupId,
+    defaultPauseBetweenTracks,
+    defaultActionAfterTrack,
+    getTrackSettings,
+    getGroupSettings,
+    plannedEndTime,
+  ]);
 
   if (modal !== 'trackSettings') {
     return null;
@@ -73,6 +111,7 @@ export const TrackSettingsModal: React.FC = () => {
         localActionAfterTrack === 'default' ? defaultActionAfterTrack : localActionAfterTrack,
       );
       setDefaultPauseBetweenTracks(localPauseBetweenTracks);
+      setPlannedEndTime(timeStringToTimestamp(localPlannedEndTime));
     } else if (groupId) {
       setGroupSettings(groupId, {
         actionAfterTrack: localActionAfterTrack === 'default' ? null : localActionAfterTrack,
@@ -169,6 +208,31 @@ export const TrackSettingsModal: React.FC = () => {
                 min="0"
                 step="1"
               />
+            </div>
+          )}
+
+          {isGlobal && (
+            <div className="settings-group">
+              <label className="settings-label" htmlFor="track-settings-planned-end-time">
+                Плановое время окончания
+              </label>
+              <input
+                type="time"
+                className="settings-input"
+                value={localPlannedEndTime}
+                onChange={(e) => setLocalPlannedEndTime(e.target.value)}
+                id="track-settings-planned-end-time"
+              />
+              <button
+                className="modal-button secondary"
+                onClick={() => {
+                  setLocalPlannedEndTime('');
+                  setPlannedEndTime(null);
+                }}
+                style={{ marginTop: '8px' }}
+              >
+                Очистить
+              </button>
             </div>
           )}
         </div>

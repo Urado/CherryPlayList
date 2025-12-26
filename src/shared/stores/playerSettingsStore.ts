@@ -16,6 +16,9 @@ export interface PlayerGroupSettings {
 export interface PlayerSettings {
   defaultPauseBetweenTracks: number;
   defaultActionAfterTrack: ActionAfterTrack;
+  plannedEndTime: number | null;
+  playerAudioDeviceId: string | null;
+  demoPlayerAudioDeviceId: string | null;
 }
 
 interface PlayerSettingsState extends PlayerSettings {
@@ -40,6 +43,9 @@ interface PlayerSettingsState extends PlayerSettings {
   setEditingTrack: (trackId: string | null) => void;
   setEditingGroup: (groupId: string | null) => void;
   setEditingGlobal: (isGlobal: boolean) => void;
+  setPlannedEndTime: (time: number | null) => void;
+  setPlayerAudioDeviceId: (deviceId: string | null) => void;
+  setDemoPlayerAudioDeviceId: (deviceId: string | null) => void;
 }
 
 const INITIAL_STATE: Omit<
@@ -55,9 +61,15 @@ const INITIAL_STATE: Omit<
   | 'setEditingTrack'
   | 'setEditingGroup'
   | 'setEditingGlobal'
+  | 'setPlannedEndTime'
+  | 'setPlayerAudioDeviceId'
+  | 'setDemoPlayerAudioDeviceId'
 > = {
   defaultPauseBetweenTracks: 0,
   defaultActionAfterTrack: 'next',
+  plannedEndTime: null,
+  playerAudioDeviceId: null,
+  demoPlayerAudioDeviceId: null,
   trackSettings: new Map(),
   groupSettings: new Map(),
   editingTrackId: null,
@@ -141,13 +153,28 @@ export const usePlayerSettingsStore = createWithEqualityFn<PlayerSettingsState>(
           editingIsGlobal: isGlobal,
         });
       },
+
+      setPlannedEndTime: (time) => {
+        set({ plannedEndTime: time });
+      },
+
+      setPlayerAudioDeviceId: (deviceId) => {
+        set({ playerAudioDeviceId: deviceId });
+      },
+
+      setDemoPlayerAudioDeviceId: (deviceId) => {
+        set({ demoPlayerAudioDeviceId: deviceId });
+      },
     }),
     {
       name: 'cherryplaylist-player-settings',
-      version: 1,
+      version: 2,
       partialize: (state) => ({
         defaultPauseBetweenTracks: state.defaultPauseBetweenTracks,
         defaultActionAfterTrack: state.defaultActionAfterTrack,
+        plannedEndTime: state.plannedEndTime,
+        playerAudioDeviceId: state.playerAudioDeviceId,
+        demoPlayerAudioDeviceId: state.demoPlayerAudioDeviceId,
         trackSettings: Array.from(state.trackSettings.entries()),
         groupSettings: Array.from(state.groupSettings.entries()),
       }),
@@ -156,6 +183,9 @@ export const usePlayerSettingsStore = createWithEqualityFn<PlayerSettingsState>(
         return {
           ...currentState,
           ...persistedState,
+          // Миграция с версии 1: добавляем поля для аудиоустройств, если их нет
+          playerAudioDeviceId: persistedState?.playerAudioDeviceId ?? null,
+          demoPlayerAudioDeviceId: persistedState?.demoPlayerAudioDeviceId ?? null,
           trackSettings: new Map(persistedState?.trackSettings || []),
           groupSettings: new Map(persistedState?.groupSettings || []),
         };

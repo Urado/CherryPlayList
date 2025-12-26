@@ -13,6 +13,10 @@ import { useTrackWorkspaceDragAndDrop, useTrackDuration } from '@shared/hooks';
 import { fileService, ipcService } from '@shared/services';
 import { useDemoPlayerStore, usePlaylistStore, useSettingsStore } from '@shared/stores';
 import { formatDuration, logger } from '@shared/utils';
+import {
+  calculateSimpleDividerMarkers,
+  formatSimpleDividerLabel,
+} from '../player/dividerUtils';
 
 interface PlaylistViewProps {
   workspaceId: WorkspaceId;
@@ -128,35 +132,14 @@ export const PlaylistView: React.FC<PlaylistViewProps> = ({
   const { hourDividerInterval, showHourDividers } = useSettingsStore();
 
   // Функция для вычисления позиций отсечек с настраиваемым интервалом
-  const calculateDividerMarkers = useMemo(() => {
-    const markers: number[] = [];
-    let accumulatedDuration = 0;
-
-    tracks.forEach((track, index) => {
-      accumulatedDuration += track.duration || 0;
-      const intervals = Math.floor(accumulatedDuration / hourDividerInterval);
-
-      // Если перешли через новый интервал, добавляем маркер после этого трека
-      if (intervals > markers.length) {
-        markers.push(index);
-      }
-    });
-
-    return markers;
-  }, [tracks, hourDividerInterval]);
+  const calculateDividerMarkers = useMemo(
+    () => calculateSimpleDividerMarkers(tracks, hourDividerInterval),
+    [tracks, hourDividerInterval],
+  );
 
   // Форматирование метки отсечки в формат "hh:mm"
   const formatDividerLabel = useCallback(
-    (index: number): string => {
-      const accumulatedDuration = tracks
-        .slice(0, index + 1)
-        .reduce((sum, track) => sum + (track.duration || 0), 0);
-
-      const hours = Math.floor(accumulatedDuration / 3600);
-      const minutes = Math.floor((accumulatedDuration % 3600) / 60);
-
-      return `${hours}:${minutes.toString().padStart(2, '0')}`;
-    },
+    (index: number): string => formatSimpleDividerLabel(tracks, index),
     [tracks],
   );
 

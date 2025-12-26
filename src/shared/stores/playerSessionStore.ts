@@ -13,6 +13,7 @@ interface PlayerSessionState {
   disabledTrackIds: Set<string>;
   disabledGroupIds: Set<string>;
   currentTrackId: string | null;
+  sessionStartTime: number | null;
 
   startSession: () => void;
   resetSession: () => void;
@@ -42,6 +43,7 @@ const INITIAL_STATE: Omit<
   disabledTrackIds: new Set<string>(),
   disabledGroupIds: new Set<string>(),
   currentTrackId: null,
+  sessionStartTime: null,
 };
 
 export const usePlayerSessionStore = createWithEqualityFn<PlayerSessionState>()(
@@ -57,6 +59,7 @@ export const usePlayerSessionStore = createWithEqualityFn<PlayerSessionState>()(
 
         set({
           mode: 'session',
+          sessionStartTime: Date.now(),
           // История и текущий трек остаются (могут быть восстановлены из persist)
         });
       },
@@ -68,6 +71,7 @@ export const usePlayerSessionStore = createWithEqualityFn<PlayerSessionState>()(
           disabledTrackIds: new Set<string>(),
           disabledGroupIds: new Set<string>(),
           currentTrackId: null,
+          sessionStartTime: null,
         });
       },
 
@@ -145,13 +149,14 @@ export const usePlayerSessionStore = createWithEqualityFn<PlayerSessionState>()(
     }),
     {
       name: 'cherryplaylist-player-session',
-      version: 2, // Увеличиваем версию из-за добавления disabledGroupIds
+      version: 3, // Увеличиваем версию из-за добавления sessionStartTime
       partialize: (state) => ({
         mode: state.mode,
         playedTrackIds: Array.from(state.playedTrackIds),
         disabledTrackIds: Array.from(state.disabledTrackIds),
         disabledGroupIds: Array.from(state.disabledGroupIds),
         currentTrackId: state.currentTrackId,
+        sessionStartTime: state.sessionStartTime,
       }),
       // Восстанавливаем Set из массива
       merge: (persistedState: any, currentState: PlayerSessionState) => {
@@ -161,6 +166,7 @@ export const usePlayerSessionStore = createWithEqualityFn<PlayerSessionState>()(
           playedTrackIds: new Set(persistedState?.playedTrackIds || []),
           disabledTrackIds: new Set(persistedState?.disabledTrackIds || []),
           disabledGroupIds: new Set(persistedState?.disabledGroupIds || []),
+          sessionStartTime: persistedState?.sessionStartTime ?? null,
         };
       },
     },

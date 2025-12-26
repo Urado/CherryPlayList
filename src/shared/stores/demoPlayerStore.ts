@@ -4,7 +4,11 @@ import { Track } from '@core/types/track';
 import { WorkspaceId } from '@core/types/workspace';
 
 import { ipcService } from '../services/ipcService';
+import { setAudioSinkId, getDefaultDeviceId } from '../utils/audioDevices';
 import { logger } from '../utils/logger';
+import { usePlayerSettingsStore } from './playerSettingsStore';
+import { usePlayerAudioStore } from './playerAudioStore';
+import { useUIStore } from './uiStore';
 
 export type PlayerStatus = 'idle' | 'playing' | 'paused' | 'ended';
 
@@ -16,6 +20,7 @@ interface DemoPlayerState {
   duration: number;
   volume: number;
   error: string | null;
+  isDisabled: boolean;
 
   loadTrack: (track: Track, sourceWorkspaceId: WorkspaceId) => Promise<void>;
   play: () => Promise<void>;
@@ -23,6 +28,8 @@ interface DemoPlayerState {
   seek: (positionSeconds: number) => void;
   setVolume: (value: number) => void;
   clear: () => void;
+  setDisabled: (disabled: boolean) => void;
+  setAudioDevice: (deviceId: string | null) => Promise<void>;
 
   // Internal actions triggered by audio events
   setDuration: (durationSeconds: number) => void;
@@ -58,6 +65,8 @@ const INITIAL_STATE: Omit<
   | 'setPosition'
   | 'handleEnded'
   | 'handleError'
+  | 'setDisabled'
+  | 'setAudioDevice'
 > = {
   currentTrack: null,
   sourceWorkspaceId: null,
@@ -66,6 +75,7 @@ const INITIAL_STATE: Omit<
   duration: 0,
   volume: 0.8,
   error: null,
+  isDisabled: false,
 };
 
 export const useDemoPlayerStore = createWithEqualityFn<DemoPlayerState>((set, get) => {
@@ -77,6 +87,8 @@ export const useDemoPlayerStore = createWithEqualityFn<DemoPlayerState>((set, ge
     timeupdate?: () => void;
     loadedmetadata?: () => void;
     error?: () => void;
+    pause?: () => void;
+    play?: () => void;
   } = {};
 
   const revokeCurrentObjectUrl = () => {
@@ -100,6 +112,12 @@ export const useDemoPlayerStore = createWithEqualityFn<DemoPlayerState>((set, ge
       }
       if (eventHandlers.error) {
         audioElement.removeEventListener('error', eventHandlers.error);
+      }
+      if (eventHandlers.pause) {
+        audioElement.removeEventListener('pause', eventHandlers.pause);
+      }
+      if (eventHandlers.play) {
+        audioElement.removeEventListener('play', eventHandlers.play);
       }
       // Clear handlers
       eventHandlers = {};
@@ -145,15 +163,81 @@ export const useDemoPlayerStore = createWithEqualityFn<DemoPlayerState>((set, ge
           'Не удалось воспроизвести трек. Проверьте файл и попробуйте снова.';
         get().handleError(message, mediaError ?? undefined);
       };
+      eventHandlers.pause = () => {
+        // Синхронизируем состояние при системной паузе
+        const currentStatus = get().status;
+        if (currentStatus === 'playing') {
+          set({ status: 'paused' });
+        }
+      };
+      eventHandlers.play = () => {
+        // Синхронизируем состояние при системном возобновлении
+        const currentStatus = get().status;
+        if (currentStatus === 'paused' || currentStatus === 'idle') {
+          set({ status: 'playing', error: null });
+        }
+      };
 
       // Add event listeners
       audioElement.addEventListener('ended', eventHandlers.ended);
       audioElement.addEventListener('timeupdate', eventHandlers.timeupdate);
       audioElement.addEventListener('loadedmetadata', eventHandlers.loadedmetadata);
       audioElement.addEventListener('error', eventHandlers.error);
+      audioElement.addEventListener('pause', eventHandlers.pause);
+      audioElement.addEventListener('play', eventHandlers.play);
+
+      // Применяем выбранное устройство из настроек
+      const deviceId = usePlayerSettingsStore.getState().demoPlayerAudioDeviceId;
+      if (deviceId !== null) {
+        setAudioSinkId(audioElement, deviceId).catch((error) => {
+          logger.error('Failed to set audio device on element creation', error);
+          // Проверяем, является ли это ошибкой "устройство не найдено"
+          const isDeviceNotFound =
+            error instanceof DOMException &&
+            (error.name === 'NotFoundError' || error.message.includes('not found'));
+          
+          if (isDeviceNotFound) {
+            // Устройство не найдено - обновляем настройки
+            usePlayerSettingsStore.getState().setDemoPlayerAudioDeviceId(null);
+            useUIStore.getState().addNotification({
+              type: 'warning',
+              message: 'Выбранное аудиоустройство для демо-плеера недоступно. Используется устройство по умолчанию.',
+            });
+            // Пробуем установить устройство по умолчанию
+            setAudioSinkId(audioElement, getDefaultDeviceId()).catch((fallbackError) => {
+              logger.error('Failed to set default audio device on element creation', fallbackError);
+            });
+          }
+        });
+      }
     }
 
     return audioElement;
+  };
+
+  const syncWithPlayer = (deviceId: string | null) => {
+    const playerDeviceId = usePlayerSettingsStore.getState().playerAudioDeviceId;
+    const playerState = usePlayerAudioStore.getState();
+
+    // Проверяем, совпадают ли устройства
+    const devicesMatch =
+      deviceId !== null &&
+      playerDeviceId !== null &&
+      deviceId === playerDeviceId;
+
+    if (devicesMatch) {
+      // Если устройства совпадают и плеер играет, останавливаем и блокируем демо-плеер
+      if (playerState.status === 'playing') {
+        get().pause();
+        set({ isDisabled: true });
+      } else {
+        // Если плеер не играет, просто блокируем
+        set({ isDisabled: true });
+      }
+    } else {
+      // Если устройства не совпадают, снимаем блокировку
+      set({ isDisabled: false });
+    }
   };
 
   return {
@@ -176,6 +260,35 @@ export const useDemoPlayerStore = createWithEqualityFn<DemoPlayerState>((set, ge
         audio.currentTime = 0;
         audio.volume = get().volume;
 
+        // Применяем выбранное устройство
+        const deviceId = usePlayerSettingsStore.getState().demoPlayerAudioDeviceId;
+        if (deviceId !== null) {
+          try {
+            await setAudioSinkId(audio, deviceId);
+          } catch (error) {
+            logger.error('Failed to set audio device on track load', error);
+            // Проверяем, является ли это ошибкой "устройство не найдено"
+            const isDeviceNotFound =
+              error instanceof DOMException &&
+              (error.name === 'NotFoundError' || error.message.includes('not found'));
+            
+            if (isDeviceNotFound) {
+              // Устройство не найдено - обновляем настройки и используем устройство по умолчанию
+              usePlayerSettingsStore.getState().setDemoPlayerAudioDeviceId(null);
+              useUIStore.getState().addNotification({
+                type: 'warning',
+                message: 'Выбранное аудиоустройство для демо-плеера недоступно. Используется устройство по умолчанию.',
+              });
+              // Пробуем установить устройство по умолчанию
+              try {
+                await setAudioSinkId(audio, getDefaultDeviceId());
+              } catch (fallbackError) {
+                logger.error('Failed to set default audio device', fallbackError);
+              }
+            }
+          }
+        }
+
         set({
           currentTrack: track,
           sourceWorkspaceId,
@@ -191,13 +304,43 @@ export const useDemoPlayerStore = createWithEqualityFn<DemoPlayerState>((set, ge
     },
 
     play: async () => {
-      const { currentTrack, handleError } = get();
-      if (!currentTrack) {
+      const { currentTrack, handleError, isDisabled } = get();
+      if (!currentTrack || isDisabled) {
         return;
       }
 
       try {
         const audio = getAudioElement();
+        // Применяем выбранное устройство перед воспроизведением
+        const deviceId = usePlayerSettingsStore.getState().demoPlayerAudioDeviceId;
+        if (deviceId !== null) {
+          try {
+            await setAudioSinkId(audio, deviceId);
+            // Синхронизируем с плеером после установки устройства
+            syncWithPlayer(deviceId);
+          } catch (error) {
+            logger.error('Failed to set audio device on play', error);
+            // Проверяем, является ли это ошибкой "устройство не найдено"
+            const isDeviceNotFound =
+              error instanceof DOMException &&
+              (error.name === 'NotFoundError' || error.message.includes('not found'));
+            
+            if (isDeviceNotFound) {
+              // Устройство не найдено - обновляем настройки и используем устройство по умолчанию
+              usePlayerSettingsStore.getState().setDemoPlayerAudioDeviceId(null);
+              useUIStore.getState().addNotification({
+                type: 'warning',
+                message: 'Выбранное аудиоустройство для демо-плеера недоступно. Используется устройство по умолчанию.',
+              });
+              // Пробуем установить устройство по умолчанию
+              try {
+                await setAudioSinkId(audio, getDefaultDeviceId());
+              } catch (fallbackError) {
+                logger.error('Failed to set default audio device', fallbackError);
+              }
+            }
+          }
+        }
         await audio.play();
         set({ status: 'playing', error: null });
       } catch (error) {
@@ -274,6 +417,47 @@ export const useDemoPlayerStore = createWithEqualityFn<DemoPlayerState>((set, ge
         status: 'idle',
         error: message,
       });
+    },
+
+    setDisabled: (disabled) => {
+      set({ isDisabled: disabled });
+      if (disabled && get().status === 'playing') {
+        get().pause();
+      }
+    },
+
+    setAudioDevice: async (deviceId) => {
+      const audio = audioElement ?? getAudioElement();
+      try {
+        await setAudioSinkId(audio, deviceId);
+        // Синхронизируем с плеером
+        syncWithPlayer(deviceId);
+      } catch (error) {
+        logger.error('Failed to set audio device', error);
+        // Проверяем, является ли это ошибкой "устройство не найдено"
+        const isDeviceNotFound =
+          error instanceof DOMException &&
+          (error.name === 'NotFoundError' || error.message.includes('not found'));
+        
+        if (isDeviceNotFound) {
+          // Устройство не найдено - обновляем настройки и используем устройство по умолчанию
+          usePlayerSettingsStore.getState().setDemoPlayerAudioDeviceId(null);
+          useUIStore.getState().addNotification({
+            type: 'warning',
+            message: 'Выбранное аудиоустройство для демо-плеера недоступно. Используется устройство по умолчанию.',
+          });
+          // Пробуем установить устройство по умолчанию
+          try {
+            await setAudioSinkId(audio, getDefaultDeviceId());
+          } catch (fallbackError) {
+            logger.error('Failed to set default audio device', fallbackError);
+            throw error;
+          }
+        } else {
+          // Для других ошибок пробрасываем исходную ошибку
+          throw error;
+        }
+      }
     },
   };
 });
